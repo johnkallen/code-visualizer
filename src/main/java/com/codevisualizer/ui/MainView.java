@@ -31,6 +31,7 @@ public class MainView {
 
     private ExecutionEngine engine;
     private CodeParser.ParseResult lastResult;
+    private final Button stepBtn;
 
     public MainView() {
 
@@ -79,11 +80,12 @@ public class MainView {
         variableContainer.setStyle("-fx-padding: 5; -fx-background-color: #f0f0f0;");
 
         // Create HBox for controls
+        stepBtn = new Button("Step");
         Button clearBtn = new Button("Clear");
         HBox controls = new HBox(10);
         controls.getChildren().addAll(
                 new Button("Visualize"),
-                new Button("Step"),
+                stepBtn,
                 new Button("Fit"),
                 clearBtn,
                 statusLabel
@@ -232,7 +234,14 @@ public class MainView {
 
         if (event.type == StepEvent.StepType.COMPLETE) {
             applyCodeHighlight(0, 0);
-            statusLabel.setText("Execution complete.");
+            flowChartView.clearHighlights();
+            statusLabel.setText("End of Code Reached");
+            stepBtn.setDisable(true);
+            flowChartView.showEndOverlay(() -> {
+                engine.reset();
+                stepBtn.setDisable(false);
+                statusLabel.setText("Ready. Press Step to run again.");
+            });
             return;
         }
 

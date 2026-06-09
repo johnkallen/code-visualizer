@@ -3,8 +3,10 @@ package com.codevisualizer.ui;
 import com.codevisualizer.enums.NodeType;
 import com.codevisualizer.model.FlowEdge;
 import com.codevisualizer.model.FlowNode;
+import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.geometry.Bounds;
+import javafx.util.Duration;
 import javafx.scene.Group;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.ScrollEvent;
@@ -140,6 +142,30 @@ public class FlowChartView {
                     line.setStrokeWidth(2);
                 })
         );
+    }
+
+    public void showEndOverlay(Runnable onComplete) {
+        Rectangle dim = new Rectangle();
+        dim.widthProperty().bind(root.widthProperty());
+        dim.heightProperty().bind(root.heightProperty());
+        dim.setFill(Color.color(0, 0, 0, 0.4));
+
+        Label msg = new Label("End of Code Reached");
+        msg.setStyle("-fx-font-size: 16; -fx-font-weight: bold; -fx-text-fill: white;");
+
+        root.getChildren().addAll(dim, msg);
+
+        Platform.runLater(() -> {
+            msg.setLayoutX((root.getWidth() - msg.getWidth()) / 2);
+            msg.setLayoutY(36);
+        });
+
+        PauseTransition pause = new PauseTransition(Duration.seconds(1));
+        pause.setOnFinished(e -> {
+            root.getChildren().removeAll(dim, msg);
+            onComplete.run();
+        });
+        pause.play();
     }
 
     public void highlightNode(String nodeId) {

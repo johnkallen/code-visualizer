@@ -17,6 +17,7 @@ public class ExecutionEngine {
 
     private Phase phase = Phase.SHOW_NODE;
     private String pendingNextNodeId;
+    private String firstNodeId;
 
     private enum Phase {
         SHOW_NODE,
@@ -33,10 +34,18 @@ public class ExecutionEngine {
         this.mockReturnValues.putAll(mockReturnValues);
 
         if (!nodes.isEmpty()) {
-            context.currentNodeId = nodes.get(0).id;
+            firstNodeId = nodes.get(0).id;
+            context.currentNodeId = firstNodeId;
         } else {
             context.finished = true;
         }
+    }
+
+    public void reset() {
+        context.currentNodeId = firstNodeId;
+        context.finished = (firstNodeId == null);
+        phase = Phase.SHOW_NODE;
+        pendingNextNodeId = null;
     }
 
     public StepEvent step() {
