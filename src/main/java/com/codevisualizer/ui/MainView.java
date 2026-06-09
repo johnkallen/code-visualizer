@@ -182,8 +182,7 @@ public class MainView {
 
     private String formatCode(String code) {
         try {
-            String wrapped = code.contains("class") ? code
-                    : "class Temp { void temp() { " + code + " } }";
+            String wrapped = wrapForParsing(code);
             CompilationUnit cu = StaticJavaParser.parse(wrapped);
             Optional<MethodDeclaration> method = cu.findFirst(MethodDeclaration.class);
             if (method.isEmpty() || method.get().getBody().isEmpty()) return code;
@@ -239,6 +238,15 @@ public class MainView {
             }
             statusLabel.setText("Transition");
         }
+    }
+
+    private static String wrapForParsing(String code) {
+        if (code.contains("class")) return code;
+        String first = code.trim().split("\\s+")[0];
+        boolean isMethodDecl = first.equals("public") || first.equals("private")
+                || first.equals("protected") || first.equals("static") || first.equals("void");
+        return isMethodDecl ? "class Temp { " + code + " }"
+                            : "class Temp { void temp() { " + code + " } }";
     }
 
     private void applyCodeHighlight(int beginLine, int endLine) {

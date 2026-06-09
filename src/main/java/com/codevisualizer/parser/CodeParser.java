@@ -47,7 +47,11 @@ public class CodeParser {
         ParseResult result = new ParseResult();
 
         if (!code.contains("class")) {
-            code = "class Temp { void temp() { " + code + " } }";
+            String first = code.trim().split("\\s+")[0];
+            boolean isMethodDecl = first.equals("public") || first.equals("private")
+                    || first.equals("protected") || first.equals("static") || first.equals("void");
+            code = isMethodDecl ? "class Temp { " + code + " }"
+                                : "class Temp { void temp() { " + code + " } }";
         }
 
         try {
