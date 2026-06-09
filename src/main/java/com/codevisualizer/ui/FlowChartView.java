@@ -124,6 +124,11 @@ public class FlowChartView {
 
             // IMPORTANT: store shape for highlighting
             nodeShapes.put(node.id, shape);
+
+            String lowerLabel = node.label.toLowerCase();
+            if (lowerLabel.contains("save") || lowerLabel.contains("update") || lowerLabel.contains("delete")) {
+                drawDatabaseSymbol(node);
+            }
         }
 
         Platform.runLater(this::fitToScreen);
@@ -295,6 +300,51 @@ public class FlowChartView {
             lastPanX = event.getSceneX();
             lastPanY = event.getSceneY();
         });
+    }
+
+    private void drawDatabaseSymbol(FlowNode node) {
+        double midY   = node.y + node.height / 2.0;
+        double lineX0 = node.x + node.width;
+        double lineX1 = lineX0 + 16;
+        double dbW    = 70;
+        double dbH    = 54;
+        double ry     = 9;   // ellipse cap half-height
+        double dbTopY = midY - dbH / 2.0;
+        double dbCX   = lineX1 + dbW / 2.0;
+
+        Line connector = new Line(lineX0, midY, lineX1, midY);
+        connector.setStroke(Color.BLACK);
+        connector.setStrokeWidth(1.5);
+
+        // Body fill (white, no stroke — sides drawn as lines)
+        Rectangle body = new Rectangle(lineX1, dbTopY + ry, dbW, dbH - 2 * ry);
+        body.setFill(Color.WHITE);
+        body.setStroke(Color.TRANSPARENT);
+
+        Line leftSide  = new Line(lineX1,      dbTopY + ry, lineX1,      dbTopY + dbH - ry);
+        Line rightSide = new Line(lineX1 + dbW, dbTopY + ry, lineX1 + dbW, dbTopY + dbH - ry);
+        leftSide.setStroke(Color.BLACK);   leftSide.setStrokeWidth(1.5);
+        rightSide.setStroke(Color.BLACK);  rightSide.setStrokeWidth(1.5);
+
+        Ellipse topCap = new Ellipse(dbCX, dbTopY + ry, dbW / 2.0, ry);
+        topCap.setFill(Color.WHITE);
+        topCap.setStroke(Color.BLACK);
+        topCap.setStrokeWidth(1.5);
+
+        Arc bottomArc = new Arc(dbCX, dbTopY + dbH - ry, dbW / 2.0, ry, 0, -180);
+        bottomArc.setType(ArcType.OPEN);
+        bottomArc.setFill(Color.TRANSPARENT);
+        bottomArc.setStroke(Color.BLACK);
+        bottomArc.setStrokeWidth(1.5);
+
+        Text dbLabel = new Text("Database");
+        dbLabel.setStyle("-fx-font-size: 11;");
+        dbLabel.setTextAlignment(javafx.scene.text.TextAlignment.CENTER);
+        dbLabel.setWrappingWidth(dbW);
+        dbLabel.setX(lineX1);
+        dbLabel.setY(dbTopY + ry + (dbH - 2 * ry) / 2.0 + 5);
+
+        contentGroup.getChildren().addAll(connector, body, leftSide, rightSide, topCap, bottomArc, dbLabel);
     }
 
     private void drawMethodBox(List<FlowNode> nodes, String methodName) {
