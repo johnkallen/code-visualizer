@@ -72,7 +72,7 @@ int orderId = getNextOrderId(requestId);
 int customerId = getCustomerId(orderId);
 boolean isValid = validateOrder(orderId);
 if (isValid) {
-    int total = calculateTotal(orderId);
+    double total = calculateTotal(orderId);
     applyDiscount(orderId);
     saveOrder(orderId, customerId, total);
 } else {

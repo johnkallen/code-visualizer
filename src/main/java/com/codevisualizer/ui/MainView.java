@@ -7,6 +7,7 @@ import com.codevisualizer.parser.CodeParser;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import javafx.beans.binding.Bindings;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
@@ -94,7 +95,15 @@ public class MainView {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
         Button exportBtn = new Button("Export");
-        controls.getChildren().addAll(spacer, exportBtn);
+
+        Label dimensionsLabel = new Label();
+        dimensionsLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 11;");
+        dimensionsLabel.textProperty().bind(Bindings.createStringBinding(
+                () -> (int) root.getWidth() + " × " + (int) root.getHeight(),
+                root.widthProperty(), root.heightProperty()
+        ));
+
+        controls.getChildren().addAll(spacer, exportBtn, dimensionsLabel);
         controls.setStyle("-fx-padding: 10 15 15 15;");
 
         root.setTop(variableContainer);

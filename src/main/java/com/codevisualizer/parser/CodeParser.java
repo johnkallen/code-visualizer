@@ -60,6 +60,19 @@ public class CodeParser {
         try {
             CompilationUnit cu = StaticJavaParser.parse(code);
 
+            Optional<MethodDeclaration> methodOpt = cu.findFirst(MethodDeclaration.class);
+            if (methodOpt.isEmpty() || methodOpt.get().getBody().isEmpty()) return result;
+
+            MethodDeclaration method = methodOpt.get();
+            if (!"temp".equals(method.getNameAsString())) {
+                result.methodName = method.getNameAsString();
+            }
+
+            // Parameters first so they appear at the top of the Variables panel
+            method.getParameters().forEach(p ->
+                    result.variables.put(p.getNameAsString(), defaultValue(p.getType().asString()))
+            );
+
             cu.findAll(VariableDeclarator.class).forEach(v -> {
                 result.variables.put(v.getNameAsString(), defaultValue(v.getType().asString()));
                 v.getInitializer().ifPresent(init -> {
@@ -69,17 +82,6 @@ public class CodeParser {
                     }
                 });
             });
-
-            Optional<MethodDeclaration> methodOpt = cu.findFirst(MethodDeclaration.class);
-            if (methodOpt.isEmpty() || methodOpt.get().getBody().isEmpty()) return result;
-
-            MethodDeclaration method = methodOpt.get();
-            if (!"temp".equals(method.getNameAsString())) {
-                result.methodName = method.getNameAsString();
-            }
-            method.getParameters().forEach(p ->
-                    result.variables.put(p.getNameAsString(), defaultValue(p.getType().asString()))
-            );
 
             List<Statement> statements = method.getBody().get().getStatements();
             logger.debug("Found {} top-level statements", statements.size());

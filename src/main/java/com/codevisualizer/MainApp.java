@@ -10,7 +10,7 @@ public class MainApp extends Application {
     public void start(Stage stage) {
         MainView view = new MainView();
 
-        Scene scene = new Scene(view.getRoot(), 1200, 800);
+        Scene scene = new Scene(view.getRoot(), 1500, 1200);
         stage.setScene(scene);
         stage.setTitle("Code Visualizer");
         stage.show();
