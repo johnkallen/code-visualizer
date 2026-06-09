@@ -26,6 +26,7 @@ public class FlowChartView {
 
     private List<FlowNode> currentNodes;
     private List<FlowEdge> currentEdges;
+    private String currentMethodName;
     private final Pane root = new Pane();
     private final Group contentGroup = new Group();
 
@@ -64,12 +65,14 @@ public class FlowChartView {
         contentGroup.getChildren().clear();
         nodeShapes.clear();
         edgeLines.clear();
+        currentMethodName = null;
     }
 
     public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges, String methodName) {
         clear();
         this.currentNodes = nodes;
         this.currentEdges = edges;
+        this.currentMethodName = methodName;
         logger.info("Starting to draw flow... ");
 
         if (methodName != null && !nodes.isEmpty()) {
@@ -498,77 +501,107 @@ public class FlowChartView {
     }
 
     public String generateDrawIOXML() {
-        if (currentNodes == null || currentEdges == null) {
-            return "";
-        }
+        if (currentNodes == null || currentEdges == null) return "";
 
         StringBuilder xml = new StringBuilder();
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        xml.append("<mxfile host=\"app.diagrams.net\" agent=\"Mozilla/5.0\">\n");
-        xml.append("  <diagram name=\"Page-1\" id=\"flowchart\">\n");
-        xml.append("    <mxGraphModel dx=\"1213\" dy=\"757\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"850\" pageHeight=\"1100\" math=\"0\" shadow=\"0\">\n");
+        xml.append("<mxfile host=\"app.diagrams.net\">\n");
+        xml.append("  <diagram name=\"Page-1\">\n");
+        xml.append("    <mxGraphModel>\n");
         xml.append("      <root>\n");
         xml.append("        <mxCell id=\"0\"/>\n");
         xml.append("        <mxCell id=\"1\" parent=\"0\"/>\n");
 
-        // Add nodes
-        for (FlowNode node : currentNodes) {
-            String id = node.id;
-            String label = node.label;
-            double x = node.x;
-            double y = node.y;
-            double width = node.width;
-            double height = node.height;
-            String shape = node.type == NodeType.DECISION ? "rhombus" : "rectangle";
-
-            xml.append("        <mxCell id=\"").append(id)
-                    .append("\" value=\"").append(label)
-                    .append("\" style=\"shape=").append(shape)
-                    .append(";fillColor=none;strokeColor=black;whiteSpace=wrap;html=1;\" parent=\"1\" vertex=\"1\">\n");
-            xml.append("          <mxGeometry x=\"").append(x)
-                    .append("\" y=\"").append(y)
-                    .append("\" width=\"").append(width)
-                    .append("\" height=\"").append(height)
+        // ── Method box (dashed) — added first so it renders behind nodes ──
+        if (currentMethodName != null && !currentNodes.isEmpty()) {
+            double pad = 24;
+            double minX = currentNodes.stream().mapToDouble(n -> n.x).min().orElse(0) - pad;
+            double minY = currentNodes.stream().mapToDouble(n -> n.y).min().orElse(0) - pad - 16;
+            double maxX = currentNodes.stream().mapToDouble(n -> n.x + n.width).max().orElse(0) + pad;
+            double maxY = currentNodes.stream().mapToDouble(n -> n.y + n.height).max().orElse(0) + pad;
+            xml.append("        <mxCell id=\"method-box\" value=\"")
+                    .append(xmlEscape(currentMethodName + "()"))
+                    .append("\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=none;")
+                    .append("strokeColor=#888888;dashed=1;dashPattern=8 5;")
+                    .append("verticalAlign=top;align=left;fontSize=12;fontColor=#888888;spacingLeft=6;")
+                    .append("\" vertex=\"1\" parent=\"1\">\n");
+            xml.append("          <mxGeometry x=\"").append(minX)
+                    .append("\" y=\"").append(minY)
+                    .append("\" width=\"").append(maxX - minX)
+                    .append("\" height=\"").append(maxY - minY)
                     .append("\" as=\"geometry\"/>\n");
             xml.append("        </mxCell>\n");
         }
 
-        // Add edges with waypoints
+        // ── Nodes + database symbols ──────────────────────────────────────
+        int dbIdx = 0;
+        for (FlowNode node : currentNodes) {
+            String nodeStyle = node.type == NodeType.DECISION
+                    ? "rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;"
+                    : "rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
+
+            xml.append("        <mxCell id=\"").append(node.id)
+                    .append("\" value=\"").append(xmlEscape(node.label))
+                    .append("\" style=\"").append(nodeStyle)
+                    .append("\" vertex=\"1\" parent=\"1\">\n");
+            xml.append("          <mxGeometry x=\"").append(node.x)
+                    .append("\" y=\"").append(node.y)
+                    .append("\" width=\"").append(node.width)
+                    .append("\" height=\"").append(node.height)
+                    .append("\" as=\"geometry\"/>\n");
+            xml.append("        </mxCell>\n");
+
+            String lower = node.label.toLowerCase();
+            if (lower.contains("save") || lower.contains("update") || lower.contains("delete")) {
+                double dbW = 70, dbH = 54;
+                double dbX = node.x + node.width + 16;
+                double dbY = node.y + node.height / 2.0 - dbH / 2.0;
+                String dbId = "db-" + dbIdx;
+
+                xml.append("        <mxCell id=\"").append(dbId)
+                        .append("\" value=\"Database\" style=\"shape=cylinder;whiteSpace=wrap;html=1;")
+                        .append("fillColor=#ffffff;strokeColor=#000000;fontSize=11;verticalAlign=middle;")
+                        .append("\" vertex=\"1\" parent=\"1\">\n");
+                xml.append("          <mxGeometry x=\"").append(dbX)
+                        .append("\" y=\"").append(dbY)
+                        .append("\" width=\"").append(dbW)
+                        .append("\" height=\"").append(dbH)
+                        .append("\" as=\"geometry\"/>\n");
+                xml.append("        </mxCell>\n");
+
+                xml.append("        <mxCell id=\"db-conn-").append(dbIdx++)
+                        .append("\" value=\"\" style=\"endArrow=none;html=1;")
+                        .append("exitX=1;exitY=0.5;exitDx=0;exitDy=0;")
+                        .append("entryX=0;entryY=0.5;entryDx=0;entryDy=0;")
+                        .append("\" edge=\"1\" source=\"").append(node.id)
+                        .append("\" target=\"").append(dbId)
+                        .append("\" parent=\"1\">\n");
+                xml.append("          <mxGeometry relative=\"1\" as=\"geometry\"/>\n");
+                xml.append("        </mxCell>\n");
+            }
+        }
+
+        // ── Edges ─────────────────────────────────────────────────────────
         for (FlowEdge edge : currentEdges) {
-            String id = edge.key();
-            String fromId = edge.fromId;
-            String toId = edge.toId;
+            FlowNode from = currentNodes.stream().filter(n -> n.id.equals(edge.fromId)).findFirst().orElse(null);
+            FlowNode to   = currentNodes.stream().filter(n -> n.id.equals(edge.toId)).findFirst().orElse(null);
+            if (from == null || to == null) continue;
+
             String label = edge.label != null ? edge.label : "";
+            String exitPoint  = (from.type == NodeType.DECISION && "True".equalsIgnoreCase(label))
+                    ? "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
+                    : "exitX=0.5;exitY=1;exitDx=0;exitDy=0;";
+            String entryPoint = "entryX=0.5;entryY=0;entryDx=0;entryDy=0;";
 
-            // Find source and target nodes
-            FlowNode fromNode = currentNodes.stream()
-                    .filter(n -> n.id.equals(fromId))
-                    .findFirst()
-                    .orElse(null);
-            FlowNode toNode = currentNodes.stream()
-                    .filter(n -> n.id.equals(toId))
-                    .findFirst()
-                    .orElse(null);
-
-            if (fromNode == null || toNode == null) continue;
-
-            // Calculate edge waypoints
-            double fromX = fromNode.x + fromNode.width / 2;
-            double fromY = fromNode.y + fromNode.height;
-            double toX = toNode.x + toNode.width / 2;
-            double toY = toNode.y;
-
-            xml.append("        <mxCell id=\"").append(id)
-                    .append("\" value=\"").append(label)
-                    .append("\" source=\"").append(fromId)
-                    .append("\" target=\"").append(toId)
-                    .append("\" edge=\"1\" parent=\"1\" style=\"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;\">\n");
-            xml.append("          <mxGeometry relative=\"1\" as=\"geometry\">\n");
-            xml.append("            <Array as=\"points\">\n");
-            xml.append("              <mxPoint x=\"").append(fromX).append("\" y=\"").append(fromY).append("\"/>\n");
-            xml.append("              <mxPoint x=\"").append(toX).append("\" y=\"").append(toY).append("\"/>\n");
-            xml.append("            </Array>\n");
-            xml.append("          </mxGeometry>\n");
+            xml.append("        <mxCell id=\"").append(edge.key())
+                    .append("\" value=\"").append(xmlEscape(label))
+                    .append("\" style=\"edgeStyle=orthogonalEdgeStyle;")
+                    .append(exitPoint).append(entryPoint)
+                    .append("rounded=0;orthogonalLoop=1;html=1;\"")
+                    .append(" source=\"").append(edge.fromId)
+                    .append("\" target=\"").append(edge.toId)
+                    .append("\" edge=\"1\" parent=\"1\">\n");
+            xml.append("          <mxGeometry relative=\"1\" as=\"geometry\"/>\n");
             xml.append("        </mxCell>\n");
         }
 
@@ -577,6 +610,14 @@ public class FlowChartView {
         xml.append("  </diagram>\n");
         xml.append("</mxfile>");
         return xml.toString();
+    }
+
+    private static String xmlEscape(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
     }
 
 

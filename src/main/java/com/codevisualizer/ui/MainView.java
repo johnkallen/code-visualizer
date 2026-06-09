@@ -11,13 +11,12 @@ import javafx.beans.binding.Bindings;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
-import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 import org.fxmisc.flowless.VirtualizedScrollPane;
 import org.fxmisc.richtext.CodeArea;
 
 import java.io.File;
 import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -116,34 +115,31 @@ public class MainView {
         clearBtn.setOnAction(e -> clearAll());
 
         exportBtn.setOnAction(e -> {
-            DirectoryChooser directoryChooser = new DirectoryChooser();
-            File selectedDirectory = directoryChooser.showDialog(root.getScene().getWindow());
-            if (selectedDirectory == null) {
+            String xmlContent = flowChartView.generateDrawIOXML();
+            if (xmlContent.isEmpty()) {
+                statusLabel.setText("No flowchart to export.");
+                return;
+            }
+
+            FileChooser fileChooser = new FileChooser();
+            fileChooser.setTitle("Save as draw.io");
+            fileChooser.setInitialFileName("flowchart");
+            fileChooser.getExtensionFilters().add(
+                    new FileChooser.ExtensionFilter("draw.io files (*.drawio)", "*.drawio"));
+
+            File file = fileChooser.showSaveDialog(root.getScene().getWindow());
+            if (file == null) {
                 statusLabel.setText("Export cancelled.");
                 return;
             }
 
-            TextInputDialog filenameDialog = new TextInputDialog("flowchart");
-            filenameDialog.setTitle("Export to draw.io");
-            filenameDialog.setHeaderText("Enter filename (without .drawio extension):");
-            filenameDialog.setContentText("Filename:");
-
-            Optional<String> result = filenameDialog.showAndWait();
-            result.ifPresent(filename -> {
-                String fullPath = selectedDirectory.getAbsolutePath() + File.separator + filename + ".drawio";
-                String xmlContent = flowChartView.generateDrawIOXML();
-                if (xmlContent.isEmpty()) {
-                    statusLabel.setText("No flowchart to export.");
-                    return;
-                }
-                try {
-                    Files.writeString(Paths.get(fullPath), xmlContent);
-                    statusLabel.setText("Exported to " + fullPath);
-                } catch (Exception ex) {
-                    statusLabel.setText("Export failed: " + ex.getMessage());
-                    ex.printStackTrace();
-                }
-            });
+            try {
+                Files.writeString(file.toPath(), xmlContent);
+                statusLabel.setText("Exported to " + file.getAbsolutePath());
+            } catch (Exception ex) {
+                statusLabel.setText("Export failed: " + ex.getMessage());
+                ex.printStackTrace();
+            }
         });
 
         exportBtn.setStyle("-fx-padding: 5 15 5 15;");
