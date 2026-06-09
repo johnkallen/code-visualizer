@@ -67,9 +67,9 @@ if (y == 0) {
 
 --- Sample 6: save order to database ---
 
-public void updateOrder() {
-int orderId = getNextOrderId();
-int customerId = getCustomerId();
+public void updateOrder(int requestId) {
+int orderId = getNextOrderId(requestId);
+int customerId = getCustomerId(orderId);
 boolean isValid = validateOrder(orderId);
 if (isValid) {
     int total = calculateTotal(orderId);

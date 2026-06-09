@@ -64,11 +64,15 @@ public class FlowChartView {
         edgeLines.clear();
     }
 
-    public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges) {
+    public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges, String methodName) {
         clear();
         this.currentNodes = nodes;
         this.currentEdges = edges;
         logger.info("Starting to draw flow... ");
+
+        if (methodName != null && !nodes.isEmpty()) {
+            drawMethodBox(nodes, methodName);
+        }
 
         for (FlowEdge edge : edges) {
             if (edge.toId == null) continue;
@@ -265,6 +269,25 @@ public class FlowChartView {
             lastPanX = event.getSceneX();
             lastPanY = event.getSceneY();
         });
+    }
+
+    private void drawMethodBox(List<FlowNode> nodes, String methodName) {
+        double pad = 24;
+        double minX = nodes.stream().mapToDouble(n -> n.x).min().orElse(0) - pad;
+        double minY = nodes.stream().mapToDouble(n -> n.y).min().orElse(0) - pad - 16; // extra room for label
+        double maxX = nodes.stream().mapToDouble(n -> n.x + n.width).max().orElse(0) + pad;
+        double maxY = nodes.stream().mapToDouble(n -> n.y + n.height).max().orElse(0) + pad;
+
+        Rectangle box = new Rectangle(minX, minY, maxX - minX, maxY - minY);
+        box.setFill(Color.TRANSPARENT);
+        box.setStroke(Color.DARKGRAY);
+        box.setStrokeWidth(1.5);
+        box.getStrokeDashArray().addAll(8.0, 5.0);
+
+        Text label = new Text(minX + 8, minY + 14, methodName + "()");
+        label.setFill(Color.DARKGRAY);
+
+        contentGroup.getChildren().addAll(box, label);
     }
 
     private List<Line> drawEdge(FlowNode from, FlowNode to, String label) {

@@ -30,6 +30,7 @@ public class CodeParser {
         public Map<String, Object> variables = new LinkedHashMap<>();
         public List<FlowNode> flowNodes = new ArrayList<>();
         public List<FlowEdge> flowEdges = new ArrayList<>();
+        public String methodName = null;
     }
 
     private static class BranchResult {
@@ -64,7 +65,13 @@ public class CodeParser {
             Optional<MethodDeclaration> methodOpt = cu.findFirst(MethodDeclaration.class);
             if (methodOpt.isEmpty() || methodOpt.get().getBody().isEmpty()) return result;
 
-            List<Statement> statements = methodOpt.get().getBody().get().getStatements();
+            MethodDeclaration method = methodOpt.get();
+            if (!"temp".equals(method.getNameAsString())) {
+                result.methodName = method.getNameAsString();
+            }
+            method.getParameters().forEach(p -> result.variables.put(p.getNameAsString(), null));
+
+            List<Statement> statements = method.getBody().get().getStatements();
             logger.debug("Found {} top-level statements", statements.size());
 
             Layout layout = new Layout();

@@ -166,7 +166,7 @@ public class MainView {
 
             engine = new ExecutionEngine(lastResult.flowNodes, lastResult.variables);
             variablePanel.updateVariables(engine.getVariables());
-            flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges);
+            flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges, lastResult.methodName);
 
             statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
 
@@ -187,7 +187,15 @@ public class MainView {
             Optional<MethodDeclaration> method = cu.findFirst(MethodDeclaration.class);
             if (method.isEmpty() || method.get().getBody().isEmpty()) return code;
 
-            String body = method.get().getBody().get().toString();
+            MethodDeclaration m = method.get();
+
+            // If the user provided a method declaration, return the full formatted method
+            if (!"temp".equals(m.getNameAsString())) {
+                return m.toString();
+            }
+
+            // Bare code — extract and return just the body
+            String body = m.getBody().get().toString();
             // Strip outer { }
             body = body.substring(body.indexOf('{') + 1, body.lastIndexOf('}')).stripTrailing();
             // Dedent one level (JavaParser indents with 4 spaces)
