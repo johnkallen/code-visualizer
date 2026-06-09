@@ -124,12 +124,15 @@ public class ExecutionEngine {
             expr = expr.substring(0, expr.length() - 1).trim();
         }
 
-        if (expr.matches("^(int|double|long|float|boolean|String)\\s+\\w+\\s*=.*$")) {
-            String withoutType = expr.replaceFirst("^(int|double|long|float|boolean|String)\\s+", "");
-            String[] parts = withoutType.split("=", 2);
-            String varName = parts[0].trim();
-            String valueExpr = parts[1].trim();
+        java.util.regex.Matcher typedDecl = java.util.regex.Pattern
+                .compile("^(int|double|long|float|boolean|String)\\s+(\\w+)\\s*=(.*)$")
+                .matcher(expr);
+        if (typedDecl.matches()) {
+            String typeName  = typedDecl.group(1);
+            String varName   = typedDecl.group(2);
+            String valueExpr = typedDecl.group(3).trim();
             Object value = evaluateExpression(valueExpr);
+            if (value == null) value = defaultValue(typeName);
             context.variables.put(varName, value);
             return;
         }
@@ -252,6 +255,15 @@ public class ExecutionEngine {
 
         Object result = evaluateExpression(c);
         return result instanceof Boolean b && b;
+    }
+
+    private static Object defaultValue(String typeName) {
+        return switch (typeName) {
+            case "int", "long", "short", "byte" -> 0;
+            case "double", "float" -> 0.0;
+            case "boolean" -> false;
+            default -> null;
+        };
     }
 
     private int toInt(Object value) {

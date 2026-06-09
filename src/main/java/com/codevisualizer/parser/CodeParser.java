@@ -59,7 +59,7 @@ public class CodeParser {
             CompilationUnit cu = StaticJavaParser.parse(code);
 
             cu.findAll(VariableDeclarator.class).forEach(v ->
-                    result.variables.put(v.getNameAsString(), null)
+                    result.variables.put(v.getNameAsString(), defaultValue(v.getType().asString()))
             );
 
             Optional<MethodDeclaration> methodOpt = cu.findFirst(MethodDeclaration.class);
@@ -69,7 +69,9 @@ public class CodeParser {
             if (!"temp".equals(method.getNameAsString())) {
                 result.methodName = method.getNameAsString();
             }
-            method.getParameters().forEach(p -> result.variables.put(p.getNameAsString(), null));
+            method.getParameters().forEach(p ->
+                    result.variables.put(p.getNameAsString(), defaultValue(p.getType().asString()))
+            );
 
             List<Statement> statements = method.getBody().get().getStatements();
             logger.debug("Found {} top-level statements", statements.size());
@@ -250,6 +252,15 @@ public class CodeParser {
         node.beginLine = stmt.getBegin().map(p -> p.line).orElse(0);
         node.endLine   = stmt.getEnd().map(p -> p.line).orElse(0);
         return node;
+    }
+
+    private static Object defaultValue(String typeName) {
+        return switch (typeName) {
+            case "int", "long", "short", "byte" -> 0;
+            case "double", "float" -> 0.0;
+            case "boolean" -> false;
+            default -> null;
+        };
     }
 
     private static class Layout {
