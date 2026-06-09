@@ -21,14 +21,14 @@ System.out.println(x);
 int x = 5;
 int y = 10;
 if (x > 0) {
-x++;
-} else {
 x--;
+} else {
+x = 0;
 }
 if (y < 10) {
 y++;
 } else {
-y--;
+y = 10;
 }
 System.out.println(x,y);
 
@@ -40,6 +40,19 @@ x++;
 y++;
 } 
 System.out.println(x,y);
+
+int x = 5;
+int y = 0;
+if (x > 0) {
+x--;
+if (y == 0) {
+    y = 10;
+} else {
+    y--;
+}
+} else {
+ x = 0;
+}
 
 */
 

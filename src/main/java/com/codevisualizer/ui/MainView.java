@@ -17,6 +17,7 @@ import org.fxmisc.richtext.CodeArea;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Objects;
 import java.util.Optional;
 
 public class MainView {
@@ -26,7 +27,7 @@ public class MainView {
     private final CodeArea codeEditor = new CodeArea();
     private final VariablePanel variablePanel = new VariablePanel();
     private final FlowChartView flowChartView = new FlowChartView();
-    private final Label statusLabel = new Label("Paste code and click Analyze.");
+    private final Label statusLabel = new Label("Paste code and click Visualize.");
 
     private ExecutionEngine engine;
     private CodeParser.ParseResult lastResult;
@@ -34,7 +35,8 @@ public class MainView {
     public MainView() {
 
         codeEditor.getStylesheets().add(
-                MainView.class.getResource("/com/codeflow/syntax.css").toExternalForm()
+                Objects.requireNonNull(MainView.class.getResource("/com/codeflow/syntax.css"),
+                        "syntax.css not found on classpath").toExternalForm()
         );
         codeEditor.setPrefWidth(500);
 
@@ -80,7 +82,7 @@ public class MainView {
         Button clearBtn = new Button("Clear");
         HBox controls = new HBox(10);
         controls.getChildren().addAll(
-                new Button("Analyze"),
+                new Button("Visualize"),
                 new Button("Step"),
                 new Button("Fit"),
                 clearBtn,
@@ -137,7 +139,7 @@ public class MainView {
 
         variablePanel.setVariableChangeListener((name, value) -> {
             if (engine == null) {
-                statusLabel.setText("Analyze code first.");
+                statusLabel.setText("Visualize code first.");
                 return;
             }
             try {
@@ -166,7 +168,7 @@ public class MainView {
             variablePanel.updateVariables(engine.getVariables());
             flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges);
 
-            statusLabel.setText("Analyze complete. Nodes: " + lastResult.flowNodes.size());
+            statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
 
         } catch (Exception ex) {
             engine = null;
@@ -203,7 +205,7 @@ public class MainView {
 
     private void step() {
         if (engine == null) {
-            statusLabel.setText("Engine not initialized. Click Analyze first.");
+            statusLabel.setText("Engine not initialized. Click Visualize first.");
             return;
         }
 
@@ -251,6 +253,6 @@ public class MainView {
         variablePanel.clear();
         engine = null;
         lastResult = null;
-        statusLabel.setText("Paste code and click Analyze.");
+        statusLabel.setText("Paste code and click Visualize.");
     }
 }

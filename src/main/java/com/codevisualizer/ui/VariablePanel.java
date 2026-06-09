@@ -5,7 +5,6 @@ import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
@@ -66,10 +65,6 @@ public class VariablePanel {
         rebuildGrid();
         VBox.setVgrow(grid, Priority.ALWAYS);
         root.getChildren().addAll(grid, btnRow);
-    }
-
-    public Map<String, Object> getCurrentVariables() {
-        return Collections.unmodifiableMap(currentVariables);
     }
 
     public void clear() {

@@ -277,8 +277,8 @@ public class FlowChartView {
             double startY = from.y + (from.height / 2);
 
             if ("True".equalsIgnoreCase(label) || "Yes".equalsIgnoreCase(label)) {
-                logger.info("Draw DECISION Line LEFT");
-                double startX = from.x;
+                logger.info("Draw DECISION Line RIGHT");
+                double startX = from.x + from.width;
                 double endX = to.x + (to.width / 2);
                 double endY = to.y;
 
@@ -355,7 +355,7 @@ public class FlowChartView {
 
         if (from.type == NodeType.DECISION) {
             if ("True".equalsIgnoreCase(label) || "Yes".equalsIgnoreCase(label)) {
-                x = from.x - 55;
+                x = from.x + from.width + 5;
                 y = from.y + (from.height / 2) - 8;
             } else if ("False".equalsIgnoreCase(label) || "No".equalsIgnoreCase(label)) {
                 x = from.x + (from.width / 2) + 8;

@@ -89,20 +89,6 @@ public class ExecutionEngine {
         context.variables.put(name, value);
     }
 
-    public void setVariables(Map<String, Object> updatedVariables) {
-        if (updatedVariables == null) {
-            return;
-        }
-
-        for (Map.Entry<String, Object> entry : updatedVariables.entrySet()) {
-            setVariable(entry.getKey(), entry.getValue());
-        }
-    }
-
-    public boolean hasVariable(String name) {
-        return context.variables.containsKey(name);
-    }
-
     private void executeNode(FlowNode node) {
         switch (node.type) {
             case DECISION -> {

@@ -30,7 +30,16 @@ public class CodeParser {
         public Map<String, Object> variables = new LinkedHashMap<>();
         public List<FlowNode> flowNodes = new ArrayList<>();
         public List<FlowEdge> flowEdges = new ArrayList<>();
+    }
 
+    private static class BranchResult {
+        final FlowNode first;
+        final List<FlowNode> exits;
+
+        BranchResult(FlowNode first, List<FlowNode> exits) {
+            this.first = first;
+            this.exits = new ArrayList<>(exits);
+        }
     }
 
     public ParseResult parse(String code) {
@@ -38,81 +47,50 @@ public class CodeParser {
         ParseResult result = new ParseResult();
 
         if (!code.contains("class")) {
-            logger.info("Wrapping code in a temporary class");
             code = "class Temp { void temp() { " + code + " } }";
         }
 
         try {
             CompilationUnit cu = StaticJavaParser.parse(code);
-            logger.info("Parsed code into CompilationUnit");
 
             cu.findAll(VariableDeclarator.class).forEach(v ->
                     result.variables.put(v.getNameAsString(), null)
             );
-            logger.debug("Collected {} variables", result.variables.size());
 
             Optional<MethodDeclaration> methodOpt = cu.findFirst(MethodDeclaration.class);
-            if (methodOpt.isEmpty() || methodOpt.get().getBody().isEmpty()) {
-                logger.warn("No method body found in code");
-                return result;
-            }
+            if (methodOpt.isEmpty() || methodOpt.get().getBody().isEmpty()) return result;
 
             List<Statement> statements = methodOpt.get().getBody().get().getStatements();
-            logger.debug("Found {} statements in method body", statements.size());
+            logger.debug("Found {} top-level statements", statements.size());
 
             Layout layout = new Layout();
             FlowNode previous = null;
-
-            List<FlowNode> branchEnds = new ArrayList<>();
+            List<FlowNode> pendingExits = new ArrayList<>();
 
             for (Statement stmt : statements) {
-                logger.debug("Processing statement: {}", stmt);
-                // Scan Statements and Identify different code types
                 if (stmt instanceof IfStmt ifStmt) {
-                    List<FlowNode> predecessors = new ArrayList<>(branchEnds);
+                    List<FlowNode> predecessors = new ArrayList<>(pendingExits);
                     if (previous != null) predecessors.add(previous);
-                    branchEnds.clear();
-                    Pair<FlowNode, FlowNode> branches = addIf(result, ifStmt, predecessors, layout);
-                    if (branches.getFirst() != null) branchEnds.add(branches.getFirst());
-                    if (branches.getSecond() != null) branchEnds.add(branches.getSecond());
-                    previous = null; // No single predecessor after if-else
+                    pendingExits.clear();
+                    previous = null;
+
+                    Pair<FlowNode, List<FlowNode>> ifResult =
+                            processIfStmt(result, ifStmt, predecessors, layout.centerX, layout);
+                    pendingExits.addAll(ifResult.getSecond());
                 } else {
-                    // Default if parser cannot find a specific type
                     FlowNode node = createProcessNode(
-                            stmt,
-                            layout.centerX,
-                            layout.currentY,
-                            layout.nodeWidth,
-                            layout.nodeHeight
-                    );
+                            stmt, layout.centerX, layout.currentY, layout.nodeWidth, layout.nodeHeight);
                     result.flowNodes.add(node);
 
-                    // Connect to previous if exists (single predecessor)
-                    if (previous != null) {
-                        previous.nextId = node.id;
-                        result.flowEdges.add(new FlowEdge(previous.id, node.id, ""));
-                        logger.debug("Added edge from {} to {} with label '{}'", previous.label, node.label, "");
-                    }
-
-                    // Connect to branch ends (multiple predecessors)
-                    for (FlowNode end : branchEnds) {
-                        if (end.type == NodeType.DECISION && end.falseNextId == null) {
-                            // No-else decision: wire the false path directly to this node
-                            end.falseNextId = node.id;
-                            result.flowEdges.add(new FlowEdge(end.id, node.id, "False"));
-                            logger.debug("Added false edge from decision {} to {} (no-else)", end.label, node.label);
-                        } else {
-                            end.nextId = node.id;
-                            result.flowEdges.add(new FlowEdge(end.id, node.id, ""));
-                            logger.debug("Added edge from branch-end {} to {} with label '{}'", end.label, node.label, "");
-                        }
-                    }
+                    if (previous != null) addEdge(result, previous, node);
+                    for (FlowNode exit : pendingExits) connectExit(result, exit, node);
+                    pendingExits.clear();
 
                     previous = node;
                     layout.currentY += layout.verticalGap;
-                    branchEnds.clear();
                 }
             }
+
             logger.info("Parsing completed successfully");
         } catch (Exception e) {
             logger.error("Error parsing code", e);
@@ -121,150 +99,154 @@ public class CodeParser {
         return result;
     }
 
-    private Pair<FlowNode, FlowNode> addIf(ParseResult result, IfStmt ifStmt, List<FlowNode> predecessors, Layout layout) {
-
-        logger.debug("Processing if statement with condition: {}", ifStmt.getCondition().toString());
-        double decisionX = layout.centerX;
+    /**
+     * Builds a DECISION node at (decisionX, layout.currentY), then recursively
+     * processes the then/else bodies via processBranch.
+     * True branch goes RIGHT  (decisionX + branchOffset) so nested ifs never go off-screen.
+     * False branch goes DOWN  (same decisionX column).
+     * Returns: (decisionNode, exitNodes)
+     *   exitNodes — leaf nodes that callers must wire to whatever follows the if.
+     */
+    private Pair<FlowNode, List<FlowNode>> processIfStmt(ParseResult result, IfStmt ifStmt,
+                                                          List<FlowNode> predecessors,
+                                                          double decisionX, Layout layout) {
         double decisionY = layout.currentY;
 
-        // Create decision node
         FlowNode decision = new FlowNode(
                 UUID.randomUUID().toString(),
                 ifStmt.getCondition().toString(),
                 NodeType.DECISION,
-                decisionX,
-                decisionY,
-                layout.nodeWidth,
-                layout.nodeHeight
+                decisionX, decisionY,
+                layout.nodeWidth, layout.nodeHeight
         );
-        decision.condition  = ifStmt.getCondition().toString();
-        decision.beginLine  = ifStmt.getBegin().map(p -> p.line).orElse(0);
-        decision.endLine    = decision.beginLine;
+        decision.condition = ifStmt.getCondition().toString();
+        decision.beginLine = ifStmt.getBegin().map(p -> p.line).orElse(0);
+        decision.endLine   = decision.beginLine;
         result.flowNodes.add(decision);
 
-        // Connect all predecessors to this decision node
         for (FlowNode pred : predecessors) {
-            if (pred != null) {
-                pred.nextId = decision.id;
-                result.flowEdges.add(new FlowEdge(pred.id, decision.id, ""));
-                logger.debug("Added edge from {} to decision {} with label '{}'", pred.label, decision.label, "");
-            }
+            connectExit(result, pred, decision);
         }
 
-        // Unwrap statements
-        List<Statement> thenStatements = unwrapStatements(ifStmt.getThenStmt());
-        List<Statement> elseStatements = ifStmt.getElseStmt()
-                .map(this::unwrapStatements)
-                .orElseGet(ArrayList::new);
+        List<Statement> thenStmts = unwrapStatements(ifStmt.getThenStmt());
+        List<Statement> elseStmts = ifStmt.getElseStmt()
+                .map(this::unwrapStatements).orElseGet(ArrayList::new);
 
-        double trueX  = layout.centerX - layout.branchOffset;
-        double falseX = layout.centerX; // false branch goes straight down
-        double branchStartY = layout.currentY + layout.verticalGap;
+        double branchStartY = decisionY + layout.verticalGap;
+        double trueX = decisionX + layout.branchOffset; // right; false stays at decisionX (straight down)
 
-        // Create true and false branches
-        List<FlowNode> trueNodes = createVerticalBranch(result, thenStatements, trueX, branchStartY, layout);
-        List<FlowNode> falseNodes = createVerticalBranch(result, elseStatements, falseX, branchStartY, layout);
+        layout.currentY = branchStartY;
+        BranchResult trueBranch = processBranch(result, thenStmts, trueX, layout);
+        double trueEndY = layout.currentY;
 
-        FlowNode trueFirst = trueNodes.isEmpty() ? null : trueNodes.get(0);
-        FlowNode falseFirst = falseNodes.isEmpty() ? null : falseNodes.get(0);
+        layout.currentY = branchStartY;
+        BranchResult falseBranch = processBranch(result, elseStmts, decisionX, layout);
+        double falseEndY = layout.currentY;
 
-        // Connect decision to true/false branches with "True"/"False" labels
-        if (trueFirst != null) {
-            decision.trueNextId = trueFirst.id;
-            result.flowEdges.add(new FlowEdge(decision.id, trueFirst.id, "True"));
-            logger.debug("Added edge from {} to {} with label 'True'", decision.label, trueFirst.label);
+        layout.currentY = Math.max(trueEndY, falseEndY);
+
+        if (trueBranch.first != null) {
+            decision.trueNextId = trueBranch.first.id;
+            result.flowEdges.add(new FlowEdge(decision.id, trueBranch.first.id, "True"));
+        }
+        if (falseBranch.first != null) {
+            decision.falseNextId = falseBranch.first.id;
+            result.flowEdges.add(new FlowEdge(decision.id, falseBranch.first.id, "False"));
         }
 
-        if (falseFirst != null) {
-            decision.falseNextId = falseFirst.id;
-            result.flowEdges.add(new FlowEdge(decision.id, falseFirst.id, "False"));
-            logger.debug("Added edge from {} to {} with label 'False'", decision.label, falseFirst.label);
+        List<FlowNode> exits = new ArrayList<>(trueBranch.exits);
+        if (falseBranch.exits.isEmpty()) {
+            exits.add(decision); // no-else: decision is the false exit point
+        } else {
+            exits.addAll(falseBranch.exits);
         }
 
-        // Update layout Y position based on the deepest branch
-        int trueDepth = trueNodes.size();
-        int falseDepth = falseNodes.size();
-        int maxDepth = Math.max(trueDepth, falseDepth);
-        layout.currentY = branchStartY + (maxDepth * layout.verticalGap);
-
-        logger.debug("Created if-else branches with {} and {} nodes", trueNodes.size(), falseNodes.size());
-
-        // When there is no else, the decision node itself is the false exit point
-        FlowNode falseEnd = falseNodes.isEmpty() ? decision : falseNodes.get(falseNodes.size() - 1);
-        return new Pair<>(trueNodes.isEmpty() ? null : trueNodes.get(trueNodes.size() - 1), falseEnd);
-
+        return new Pair<>(decision, exits);
     }
 
-    private List<FlowNode> createVerticalBranch(ParseResult result,
-                                                List<Statement> statements,
-                                                double x,
-                                                double startY,
-                                                Layout layout) {
-        logger.debug("Creating vertical branch with {} statements", statements.size());
-        List<FlowNode> nodes = new ArrayList<>();
-        FlowNode previous = null;
-        double y = startY;
+    /**
+     * Processes a linear sequence of statements for a branch column at x.
+     * Handles nested IfStmts recursively.
+     * Returns BranchResult(firstNode, exitNodes).
+     */
+    private BranchResult processBranch(ParseResult result, List<Statement> statements,
+                                        double x, Layout layout) {
+        if (statements.isEmpty()) return new BranchResult(null, new ArrayList<>());
+
+        FlowNode branchFirst = null;
+        List<FlowNode> currentExits = new ArrayList<>();
 
         for (Statement stmt : statements) {
-            FlowNode node = createProcessNode(stmt, x, y, layout.nodeWidth, layout.nodeHeight);
-            result.flowNodes.add(node);
-            nodes.add(node);
+            if (stmt instanceof IfStmt ifStmt) {
+                Pair<FlowNode, List<FlowNode>> ifResult =
+                        processIfStmt(result, ifStmt, currentExits, x, layout);
+                FlowNode nestedDecision = ifResult.getFirst();
+                if (branchFirst == null) branchFirst = nestedDecision;
+                currentExits = new ArrayList<>(ifResult.getSecond());
+            } else {
+                FlowNode node = createProcessNode(
+                        stmt, x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+                result.flowNodes.add(node);
 
-            if (previous != null) {
-                previous.nextId = node.id;
-                result.flowEdges.add(new FlowEdge(previous.id, node.id, ""));
+                if (branchFirst == null) branchFirst = node;
+                for (FlowNode exit : currentExits) connectExit(result, exit, node);
+                currentExits.clear();
+
+                layout.currentY += layout.verticalGap;
+                currentExits.add(node);
             }
-
-            previous = node;
-            y += layout.verticalGap;
         }
 
-        return nodes;
+        return new BranchResult(branchFirst, currentExits);
+    }
+
+    private void addEdge(ParseResult result, FlowNode from, FlowNode to) {
+        from.nextId = to.id;
+        result.flowEdges.add(new FlowEdge(from.id, to.id, ""));
+        logger.debug("Edge: {} → {}", from.label, to.label);
+    }
+
+    private void connectExit(ParseResult result, FlowNode exit, FlowNode target) {
+        if (exit.type == NodeType.DECISION && exit.falseNextId == null) {
+            exit.falseNextId = target.id;
+            result.flowEdges.add(new FlowEdge(exit.id, target.id, "False"));
+            logger.debug("False edge: {} → {}", exit.label, target.label);
+        } else {
+            exit.nextId = target.id;
+            result.flowEdges.add(new FlowEdge(exit.id, target.id, ""));
+            logger.debug("Edge: {} → {}", exit.label, target.label);
+        }
     }
 
     private List<Statement> unwrapStatements(Statement stmt) {
         if (stmt instanceof BlockStmt block) {
             return new ArrayList<>(block.getStatements());
         }
-
         List<Statement> list = new ArrayList<>();
         list.add(stmt);
         return list;
     }
 
-    private FlowNode createProcessNode(Statement stmt,
-                                       double x,
-                                       double y,
-                                       double width,
-                                       double height) {
+    private FlowNode createProcessNode(Statement stmt, double x, double y, double width, double height) {
         NodeType type = stmt instanceof ReturnStmt ? NodeType.END : NodeType.PROCESS;
-
         FlowNode node = new FlowNode(
                 UUID.randomUUID().toString(),
                 stmt.toString().trim(),
                 type,
-                x,
-                y,
-                width,
-                height
+                x, y, width, height
         );
-
-        if (type == NodeType.PROCESS) {
-            node.expression = stmt.toString().trim();
-        }
-
+        if (type == NodeType.PROCESS) node.expression = stmt.toString().trim();
         node.beginLine = stmt.getBegin().map(p -> p.line).orElse(0);
         node.endLine   = stmt.getEnd().map(p -> p.line).orElse(0);
-
         return node;
     }
 
     private static class Layout {
-        double centerX = 320;
-        double currentY = 40;
-        double nodeWidth = 200;
-        double nodeHeight = 60;
-        double verticalGap = 100; // Spacing between nodes (top of Node to top of next node)
-        double branchOffset = 260;
+        double centerX      = 200;  // left column; true branches extend rightward
+        double currentY     = 40;
+        double nodeWidth    = 200;
+        double nodeHeight   = 60;
+        double verticalGap  = 100;
+        double branchOffset = 260;  // each nesting level adds this to the right
     }
 }

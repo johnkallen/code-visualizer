@@ -16,7 +16,6 @@ public class FlowNode {
     public int endLine   = 0;
 
     // execution metadata
-    public String variableName;
     public String expression;
     public String condition;
 
