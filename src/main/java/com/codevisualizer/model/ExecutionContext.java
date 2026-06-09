@@ -1,4 +1,4 @@
-package com.codeflow.model;
+package com.codevisualizer.model;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

@@ -1,4 +1,4 @@
-package com.codeflow.ui;
+package com.codevisualizer.ui;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;

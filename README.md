@@ -39,11 +39,11 @@
     <a href="https://www.3queen.com/index.php"><strong>Explore the apps »</strong></a>
     <br />
     <br />
-    <a href="https://github.com/johnkallen/code-flow-analyzer">View Demo</a>
+    <a href="https://github.com/johnkallen/code-visualizer">View Demo</a>
     &middot;
-    <a href="https://github.com/johnkallen/code-flow-analyzer/issues/new?labels=bug&template=bug-report---.md">Report Bug</a>
+    <a href="https://github.com/johnkallen/code-visualizer/issues/new?labels=bug&template=bug-report---.md">Report Bug</a>
     &middot;
-    <a href="https://github.com/johnkallen/code-flow-analyzer/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
+    <a href="https://github.com/johnkallen/code-visualizer/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
   </p>
 </div>
 
@@ -173,7 +173,7 @@ _For more examples, please refer to the [Documentation](https://example.com)_
     - [ ] Chinese
     - [ ] Spanish
 
-See the [open issues](https://github.com/johnkallen/code-flow-analyzer/issues) for a full list of proposed features (and known issues).
+See the [open issues](https://github.com/johnkallen/code-visualizer/issues) for a full list of proposed features (and known issues).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -231,9 +231,9 @@ Use this space to list resources you find helpful and would like to give credit 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
 [contributors-shield]: https://img.shields.io/badge/CONTRIBUTERS-2-green?style=for-the-badge
-[contributors-url]: https://github.com/johnkallen/code-flow-analyzer/commits/main/
+[contributors-url]: https://github.com/johnkallen/code-visualizer/commits/main/
 [issues-shield]: https://img.shields.io/badge/ISSUES-0_OPEN-yellow?style=for-the-badge
-[issues-url]: https://github.com/johnkallen/code-flow-analyzer/issues
+[issues-url]: https://github.com/johnkallen/code-visualizer/issues
 [linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
 [linkedin-url]: https://www.linkedin.com/in/john-kallen/
 [product-screenshot]: images/screenshot.png

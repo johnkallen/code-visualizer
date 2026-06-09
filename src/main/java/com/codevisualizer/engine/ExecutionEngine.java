@@ -1,8 +1,8 @@
-package com.codeflow.engine;
+package com.codevisualizer.engine;
 
-import com.codeflow.model.ExecutionContext;
-import com.codeflow.model.FlowNode;
-import com.codeflow.model.StepEvent;
+import com.codevisualizer.model.ExecutionContext;
+import com.codevisualizer.model.FlowNode;
+import com.codevisualizer.model.StepEvent;
 
 import java.util.Collections;
 import java.util.HashMap;

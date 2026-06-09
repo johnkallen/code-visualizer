@@ -1,9 +1,9 @@
-package com.codeflow.ui;
+package com.codevisualizer.ui;
 
-import com.codeflow.engine.ExecutionEngine;
-import com.codeflow.model.FlowNode;
-import com.codeflow.model.StepEvent;
-import com.codeflow.parser.CodeParser;
+import com.codevisualizer.engine.ExecutionEngine;
+import com.codevisualizer.model.FlowNode;
+import com.codevisualizer.model.StepEvent;
+import com.codevisualizer.parser.CodeParser;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;

@@ -1,8 +1,8 @@
-package com.codeflow.ui;
+package com.codevisualizer.ui;
 
-import com.codeflow.enums.NodeType;
-import com.codeflow.model.FlowEdge;
-import com.codeflow.model.FlowNode;
+import com.codevisualizer.enums.NodeType;
+import com.codevisualizer.model.FlowEdge;
+import com.codevisualizer.model.FlowNode;
 import javafx.application.Platform;
 import javafx.geometry.Bounds;
 import javafx.scene.Group;

@@ -1,6 +1,6 @@
-package com.codeflow.model;
+package com.codevisualizer.model;
 
-import com.codeflow.enums.NodeType;
+import com.codevisualizer.enums.NodeType;
 
 public class FlowNode {
     public String id;

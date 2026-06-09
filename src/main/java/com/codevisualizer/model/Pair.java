@@ -1,4 +1,4 @@
-package com.codeflow.model;
+package com.codevisualizer.model;
 
 public class Pair<T,U> {
     private final T first;

@@ -1,4 +1,4 @@
-package com.codeflow.model;
+package com.codevisualizer.model;
 
 public class StepEvent {
     public enum StepType {

@@ -1,8 +1,8 @@
 <project>
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.codeflow</groupId>
-    <artifactId>code-flow-analyzer</artifactId>
+    <groupId>com.codevisualizer</groupId>
+    <artifactId>code-visualizer</artifactId>
     <version>1.0</version>
 
     <properties>
@@ -63,7 +63,7 @@
                 <artifactId>javafx-maven-plugin</artifactId>
                 <version>0.0.8</version>
                 <configuration>
-                    <mainClass>com.codeflow.MainApp</mainClass>
+                    <mainClass>com.codevisualizer.MainApp</mainClass>
                 </configuration>
             </plugin>
         </plugins>

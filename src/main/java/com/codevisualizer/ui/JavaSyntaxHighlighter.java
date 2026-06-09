@@ -1,4 +1,4 @@
-package com.codeflow.ui;
+package com.codevisualizer.ui;
 
 import org.fxmisc.richtext.model.StyleSpans;
 import org.fxmisc.richtext.model.StyleSpansBuilder;

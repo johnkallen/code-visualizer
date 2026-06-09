@@ -1,9 +1,9 @@
-package com.codeflow.parser;
+package com.codevisualizer.parser;
 
-import com.codeflow.model.FlowEdge;
-import com.codeflow.model.FlowNode;
-import com.codeflow.enums.NodeType;
-import com.codeflow.model.Pair;
+import com.codevisualizer.model.FlowEdge;
+import com.codevisualizer.model.FlowNode;
+import com.codevisualizer.enums.NodeType;
+import com.codevisualizer.model.Pair;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
