@@ -8,6 +8,7 @@ import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.ReturnStmt;
@@ -28,6 +29,7 @@ public class CodeParser {
 
     public static class ParseResult {
         public Map<String, Object> variables = new LinkedHashMap<>();
+        public Map<String, Object> mockReturnValues = new LinkedHashMap<>();
         public List<FlowNode> flowNodes = new ArrayList<>();
         public List<FlowEdge> flowEdges = new ArrayList<>();
         public String methodName = null;
@@ -58,9 +60,15 @@ public class CodeParser {
         try {
             CompilationUnit cu = StaticJavaParser.parse(code);
 
-            cu.findAll(VariableDeclarator.class).forEach(v ->
-                    result.variables.put(v.getNameAsString(), defaultValue(v.getType().asString()))
-            );
+            cu.findAll(VariableDeclarator.class).forEach(v -> {
+                result.variables.put(v.getNameAsString(), defaultValue(v.getType().asString()));
+                v.getInitializer().ifPresent(init -> {
+                    if (init instanceof MethodCallExpr mce) {
+                        result.mockReturnValues.put(mce.getNameAsString(),
+                                defaultValue(v.getType().asString()));
+                    }
+                });
+            });
 
             Optional<MethodDeclaration> methodOpt = cu.findFirst(MethodDeclaration.class);
             if (methodOpt.isEmpty() || methodOpt.get().getBody().isEmpty()) return result;

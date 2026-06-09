@@ -13,6 +13,7 @@ public class ExecutionEngine {
 
     private final Map<String, FlowNode> nodesById = new HashMap<>();
     private final ExecutionContext context = new ExecutionContext();
+    private final Map<String, Object> mockReturnValues = new HashMap<>();
 
     private Phase phase = Phase.SHOW_NODE;
     private String pendingNextNodeId;
@@ -22,12 +23,14 @@ public class ExecutionEngine {
         SHOW_EDGE
     }
 
-    public ExecutionEngine(List<FlowNode> nodes, Map<String, Object> initialVariables) {
+    public ExecutionEngine(List<FlowNode> nodes, Map<String, Object> initialVariables,
+                           Map<String, Object> mockReturnValues) {
         for (FlowNode node : nodes) {
             nodesById.put(node.id, node);
         }
 
         context.variables.putAll(initialVariables);
+        this.mockReturnValues.putAll(mockReturnValues);
 
         if (!nodes.isEmpty()) {
             context.currentNodeId = nodes.get(0).id;
@@ -75,6 +78,10 @@ public class ExecutionEngine {
 
     public Map<String, Object> getVariables() {
         return Collections.unmodifiableMap(context.variables);
+    }
+
+    public void setMockReturnValue(String methodName, Object value) {
+        mockReturnValues.put(methodName, value);
     }
 
     public void setVariable(String name, Object value) {
@@ -179,6 +186,11 @@ public class ExecutionEngine {
 
         if (expr.matches("^\\w+$")) {
             return context.variables.get(expr);
+        }
+
+        if (expr.matches("^\\w+\\s*\\(.*\\)$")) {
+            String methodName = expr.substring(0, expr.indexOf('(')).trim();
+            return mockReturnValues.get(methodName);
         }
 
         if (expr.contains("+")) {

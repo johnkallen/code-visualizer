@@ -150,6 +150,15 @@ public class MainView {
                 throw ex;
             }
         });
+
+        variablePanel.setMockReturnValueChangeListener((methodName, value) -> {
+            if (engine == null) {
+                statusLabel.setText("Visualize code first.");
+                return;
+            }
+            engine.setMockReturnValue(methodName, value);
+            statusLabel.setText("Return value set: " + methodName + "() = " + value);
+        });
     }
 
     public Parent getRoot() {
@@ -164,8 +173,9 @@ public class MainView {
             CodeParser parser = new CodeParser();
             lastResult = parser.parse(formatted);
 
-            engine = new ExecutionEngine(lastResult.flowNodes, lastResult.variables);
+            engine = new ExecutionEngine(lastResult.flowNodes, lastResult.variables, lastResult.mockReturnValues);
             variablePanel.updateVariables(engine.getVariables());
+            variablePanel.updateMockReturnValues(lastResult.mockReturnValues);
             flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges, lastResult.methodName);
 
             statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
