@@ -486,6 +486,15 @@ public class FlowChartView {
             );
         }
 
+        if (node.type == NodeType.END) {
+            return new Ellipse(
+                    node.x + node.width / 2.0,
+                    node.y + node.height / 2.0,
+                    node.width / 2.0,
+                    node.height / 2.0
+            );
+        }
+
         return new Rectangle(node.x, node.y, node.width, node.height);
     }
 
@@ -538,6 +547,8 @@ public class FlowChartView {
         for (FlowNode node : currentNodes) {
             String nodeStyle = node.type == NodeType.DECISION
                     ? "rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;"
+                    : node.type == NodeType.END
+                    ? "ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;"
                     : "rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
 
             xml.append("        <mxCell id=\"").append(node.id)

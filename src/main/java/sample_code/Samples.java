@@ -3,11 +3,10 @@ package sample_code;
 
 --- Sample 1: simple if ---
 
-int x = 5;
+int x = 3;
 if (x > 0) {
-    x++;
+    x--;
 }
-
 
 --- Sample 2: if-else with multiple statements ---
 

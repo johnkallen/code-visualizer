@@ -114,6 +114,28 @@ public class CodeParser {
                 }
             }
 
+            // Append a synthetic END node unless the last statement was already a return
+            boolean needsEnd = (previous != null && previous.type != NodeType.END)
+                    || !pendingExits.isEmpty();
+
+            if (needsEnd) {
+                double endW = 120;
+                double endH = 36;
+                double endX = layout.centerX + (layout.nodeWidth - endW) / 2.0;
+                FlowNode endNode = new FlowNode(
+                        UUID.randomUUID().toString(),
+                        "End",
+                        NodeType.END,
+                        endX, layout.currentY, endW, endH
+                );
+                result.flowNodes.add(endNode);
+                if (previous != null && previous.type != NodeType.END) {
+                    addEdge(result, previous, endNode);
+                }
+                for (FlowNode exit : pendingExits) connectExit(result, exit, endNode);
+                pendingExits.clear();
+            }
+
             logger.info("Parsing completed successfully");
         } catch (Exception e) {
             logger.error("Error parsing code", e);
