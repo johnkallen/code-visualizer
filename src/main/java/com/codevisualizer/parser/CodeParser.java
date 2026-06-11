@@ -2,14 +2,21 @@ package com.codevisualizer.parser;
 
 import com.codevisualizer.model.FlowEdge;
 import com.codevisualizer.model.FlowNode;
+import com.codevisualizer.model.StreamGroup;
 import com.codevisualizer.enums.NodeType;
 import com.codevisualizer.model.Pair;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.CastExpr;
+import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.LambdaExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.nodeTypes.NodeWithSimpleName;
 import com.github.javaparser.ast.stmt.BlockStmt;
+import com.github.javaparser.ast.stmt.ExpressionStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.stmt.Statement;
@@ -17,11 +24,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 public class CodeParser {
 
@@ -32,6 +41,7 @@ public class CodeParser {
         public Map<String, Object> mockReturnValues = new LinkedHashMap<>();
         public List<FlowNode> flowNodes = new ArrayList<>();
         public List<FlowEdge> flowEdges = new ArrayList<>();
+        public List<StreamGroup> streamGroups = new ArrayList<>();
         public String methodName = null;
     }
 
@@ -77,8 +87,16 @@ public class CodeParser {
                 result.variables.put(v.getNameAsString(), defaultValue(v.getType().asString()));
                 v.getInitializer().ifPresent(init -> {
                     if (init instanceof MethodCallExpr mce) {
-                        result.mockReturnValues.put(mce.getNameAsString(),
-                                defaultValue(v.getType().asString()));
+                        // If the call has all-literal args (e.g. Arrays.asList(85, 42, 90, 61, 78)),
+                        // store them as a readable string instead of null
+                        boolean hasLiteralArgs = !mce.getArguments().isEmpty()
+                                && mce.getArguments().stream().allMatch(Expression::isLiteralExpr);
+                        Object value = hasLiteralArgs
+                                ? mce.getArguments().stream()
+                                        .map(Expression::toString)
+                                        .collect(Collectors.joining(", "))
+                                : defaultValue(v.getType().asString());
+                        result.mockReturnValues.put(mce.getNameAsString(), value);
                     }
                 });
             });
@@ -100,6 +118,12 @@ public class CodeParser {
                     Pair<FlowNode, List<FlowNode>> ifResult =
                             processIfStmt(result, ifStmt, predecessors, layout.centerX, layout);
                     pendingExits.addAll(ifResult.getSecond());
+                } else if (isStreamStatement(stmt)) {
+                    StreamExpansion se = expandStream(result, stmt, layout.centerX, layout);
+                    if (previous != null) addEdge(result, previous, se.first);
+                    for (FlowNode exit : pendingExits) connectExit(result, exit, se.first);
+                    pendingExits.clear();
+                    previous = se.terminal;
                 } else {
                     FlowNode node = createProcessNode(
                             stmt, layout.centerX, layout.currentY, layout.nodeWidth, layout.nodeHeight);
@@ -228,6 +252,12 @@ public class CodeParser {
                 FlowNode nestedDecision = ifResult.getFirst();
                 if (branchFirst == null) branchFirst = nestedDecision;
                 currentExits = new ArrayList<>(ifResult.getSecond());
+            } else if (isStreamStatement(stmt)) {
+                StreamExpansion se = expandStream(result, stmt, x, layout);
+                if (branchFirst == null) branchFirst = se.first;
+                for (FlowNode exit : currentExits) connectExit(result, exit, se.first);
+                currentExits.clear();
+                currentExits.add(se.terminal);
             } else {
                 FlowNode node = createProcessNode(
                         stmt, x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
@@ -271,6 +301,262 @@ public class CodeParser {
         list.add(stmt);
         return list;
     }
+
+    // ── Stream expansion ─────────────────────────────────────────────────────
+
+    private static class StreamExpansion {
+        final FlowNode first;
+        final FlowNode terminal;
+        final FlowNode loopNode;
+        StreamExpansion(FlowNode first, FlowNode terminal, FlowNode loopNode) {
+            this.first    = first;
+            this.terminal = terminal;
+            this.loopNode = loopNode;
+        }
+    }
+
+    private boolean isStreamStatement(Statement stmt) {
+        return stmt.findFirst(MethodCallExpr.class,
+                mce -> "stream".equals(mce.getNameAsString())).isPresent();
+    }
+
+    /** Walks the MethodCallExpr chain from outermost→innermost, then reverses to source order. */
+    private List<MethodCallExpr> collectChain(Statement stmt) {
+        List<MethodCallExpr> chain = new ArrayList<>();
+
+        // Extract the outermost expression
+        Expression root = null;
+        Optional<VariableDeclarator> vdOpt = stmt.findFirst(VariableDeclarator.class);
+        if (vdOpt.isPresent()) {
+            root = vdOpt.get().getInitializer().orElse(null);
+        } else if (stmt instanceof ExpressionStmt es) {
+            root = es.getExpression();
+        }
+        if (root == null) return chain;
+
+        // Unwrap cast(s)
+        while (root instanceof CastExpr ce) root = ce.getExpression();
+
+        // Walk from terminal inward, collecting
+        Expression cur = root;
+        while (cur instanceof MethodCallExpr mce) {
+            chain.add(mce);
+            cur = mce.getScope().orElse(null);
+        }
+        Collections.reverse(chain); // now source-order: stream(), filter(), map(), ..., terminal
+        return chain;
+    }
+
+    /** Returns body statements for a lambda arg, or empty if not a lambda. */
+    private List<Statement> lambdaBodyStmts(MethodCallExpr mce) {
+        if (mce.getArguments().isEmpty()) return new ArrayList<>();
+        Expression arg = mce.getArguments().get(0);
+        if (!(arg instanceof LambdaExpr lambda)) return new ArrayList<>();
+        Statement body = lambda.getBody();
+        if (body instanceof BlockStmt block) return new ArrayList<>(block.getStatements());
+        List<Statement> single = new ArrayList<>();
+        single.add(body);
+        return single;
+    }
+
+    private String lambdaParam(MethodCallExpr mce) {
+        if (mce.getArguments().isEmpty()) return "x";
+        Expression arg = mce.getArguments().get(0);
+        if (arg instanceof LambdaExpr le && !le.getParameters().isEmpty())
+            return le.getParameters().get(0).getNameAsString();
+        return "x";
+    }
+
+    private String lambdaBodyExpr(MethodCallExpr mce) {
+        if (mce.getArguments().isEmpty()) return mce.getNameAsString() + "()";
+        Expression arg = mce.getArguments().get(0);
+        if (arg instanceof LambdaExpr le) {
+            Statement body = le.getBody();
+            if (body instanceof ExpressionStmt es) return trimSemi(es.getExpression().toString());
+            if (body instanceof BlockStmt bs)
+                return bs.getStatements().stream()
+                        .map(s -> trimSemi(s.toString())).collect(Collectors.joining("; "));
+        }
+        return trimSemi(arg.toString());
+    }
+
+    private static String trimSemi(String s) {
+        s = s.trim();
+        return s.endsWith(";") ? s.substring(0, s.length() - 1).trim() : s;
+    }
+
+    private FlowNode makeNode(String label, NodeType type, double x, double y, double w, double h) {
+        return new FlowNode(UUID.randomUUID().toString(), label, type, x, y, w, h);
+    }
+
+    /** Wires from→to, respecting DECISION trueNextId vs PROCESS nextId. */
+    private void wireBodyEdge(ParseResult result, FlowNode from, FlowNode to) {
+        if (from.type == NodeType.DECISION) {
+            from.trueNextId = to.id;
+            result.flowEdges.add(new FlowEdge(from.id, to.id, "True"));
+        } else if (from.type == NodeType.LOOP) {
+            from.trueNextId = to.id;
+            result.flowEdges.add(new FlowEdge(from.id, to.id, ""));
+        } else {
+            addEdge(result, from, to);
+        }
+    }
+
+    StreamExpansion expandStream(ParseResult result, Statement stmt, double x, Layout layout) {
+        List<MethodCallExpr> chain = collectChain(stmt);
+        if (chain.size() < 2) {
+            FlowNode fb = createProcessNode(stmt, x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+            result.flowNodes.add(fb);
+            layout.currentY += layout.verticalGap;
+            return new StreamExpansion(fb, fb, fb);
+        }
+
+        // Source name: scope of the stream() call (chain[0])
+        String sourceName = chain.get(0).getScope()
+                .filter(s -> s instanceof NameExpr)
+                .map(s -> ((NameExpr) s).getNameAsString())
+                .orElse("collection");
+
+        // Lambda param: from the first lambda in any intermediate op
+        String param = "x";
+        for (MethodCallExpr mce : chain) {
+            if (!mce.getArguments().isEmpty() && mce.getArguments().get(0) instanceof LambdaExpr) {
+                param = lambdaParam(mce);
+                break;
+            }
+        }
+
+        // Add the stream iteration variable so it appears in the Variables panel
+        result.variables.putIfAbsent(param, 0);
+
+        // Variable name being assigned (if any)
+        String varName = stmt.findFirst(VariableDeclarator.class)
+                .map(NodeWithSimpleName::getNameAsString).orElse(null);
+
+        // 1. Init node
+        FlowNode initNode = makeNode(sourceName + ".stream()", NodeType.PROCESS,
+                x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+        result.flowNodes.add(initNode);
+        layout.currentY += layout.verticalGap;
+
+        // 2. Loop header
+        FlowNode loopNode = makeNode("for each " + param + " in " + sourceName, NodeType.LOOP,
+                x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+        result.flowNodes.add(loopNode);
+        layout.currentY += layout.verticalGap;
+        addEdge(result, initNode, loopNode);
+
+        // 3. Intermediate operations (skip stream() at index 0 and terminal at last index)
+        FlowNode prevBody = loopNode;
+        boolean firstBody = true;
+        List<FlowNode> filterNodes = new ArrayList<>();
+
+        for (int i = 1; i < chain.size() - 1; i++) {
+            MethodCallExpr mce = chain.get(i);
+            String op = mce.getNameAsString();
+
+            if (op.equals("stream")) continue;
+
+            if (op.equals("filter")) {
+                String predicate = lambdaBodyExpr(mce);
+                FlowNode filterNode = makeNode(predicate, NodeType.DECISION,
+                        x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+                filterNode.condition = predicate;
+                result.flowNodes.add(filterNode);
+                wireBodyEdge(result, prevBody, filterNode);
+                if (firstBody) { loopNode.trueNextId = filterNode.id; firstBody = false; }
+                filterNodes.add(filterNode);
+                prevBody = filterNode;
+                layout.currentY += layout.verticalGap;
+
+            } else if (op.startsWith("map") || op.equals("peek") || op.equals("flatMap")) {
+                List<Statement> bodyStmts = lambdaBodyStmts(mce);
+                if (bodyStmts.isEmpty()) {
+                    // no-arg or non-lambda op — single node
+                    FlowNode opNode = makeNode(op + ": " + lambdaBodyExpr(mce), NodeType.PROCESS,
+                            x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+                    opNode.expression = opNode.label;
+                    result.flowNodes.add(opNode);
+                    wireBodyEdge(result, prevBody, opNode);
+                    if (firstBody) { loopNode.trueNextId = opNode.id; firstBody = false; }
+                    prevBody = opNode;
+                    layout.currentY += layout.verticalGap;
+                } else if (bodyStmts.size() == 1 && !(bodyStmts.get(0) instanceof BlockStmt)) {
+                    // Single-expression lambda
+                    String label = op + ": " + lambdaBodyExpr(mce);
+                    FlowNode opNode = makeNode(label, NodeType.PROCESS,
+                            x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+                    opNode.expression = label;
+                    result.flowNodes.add(opNode);
+                    wireBodyEdge(result, prevBody, opNode);
+                    if (firstBody) { loopNode.trueNextId = opNode.id; firstBody = false; }
+                    prevBody = opNode;
+                    layout.currentY += layout.verticalGap;
+                } else {
+                    // Block lambda — expand each statement
+                    for (Statement bStmt : bodyStmts) {
+                        String label = trimSemi(bStmt.toString());
+                        FlowNode bNode = makeNode(label, NodeType.PROCESS,
+                                x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+                        bNode.expression = label;
+                        result.flowNodes.add(bNode);
+                        wireBodyEdge(result, prevBody, bNode);
+                        if (firstBody) { loopNode.trueNextId = bNode.id; firstBody = false; }
+                        prevBody = bNode;
+                        layout.currentY += layout.verticalGap;
+                    }
+                }
+            }
+        }
+
+        // Back-edge: last body node → loop header
+        FlowNode lastBody = prevBody == loopNode ? null : prevBody;
+        if (lastBody != null) {
+            FlowEdge backEdge = new FlowEdge(lastBody.id, loopNode.id, "");
+            backEdge.isBackEdge = true;
+            lastBody.nextId = loopNode.id;
+            result.flowEdges.add(backEdge);
+        }
+
+        // Filter false → back to loop (skip element)
+        for (FlowNode f : filterNodes) {
+            FlowEdge filterBack = new FlowEdge(f.id, loopNode.id, "False");
+            filterBack.isBackEdge = true;
+            f.falseNextId = loopNode.id;
+            result.flowEdges.add(filterBack);
+        }
+
+        // 4. Terminal node
+        String terminalName = chain.get(chain.size() - 1).getNameAsString();
+        // Pre-populate a default return value of 0 so the variable isn't set to null
+        result.mockReturnValues.putIfAbsent(terminalName, 0);
+        String terminalLabel = varName != null ? varName + " = " + terminalName + "()" : terminalName + "()";
+        FlowNode terminalNode = makeNode(terminalLabel, NodeType.PROCESS,
+                x, layout.currentY, layout.nodeWidth, layout.nodeHeight);
+        terminalNode.expression = terminalLabel;
+        result.flowNodes.add(terminalNode);
+        loopNode.falseNextId = terminalNode.id;
+        FlowEdge exitEdge = new FlowEdge(loopNode.id, terminalNode.id, "False");
+        result.flowEdges.add(exitEdge);
+        layout.currentY += layout.verticalGap;
+
+        // Dashed bounding box: loopNode (top) → terminalNode (bottom).
+        // Left margin covers PROCESS back-edges (detourX = x - 55).
+        // Right margin covers LOOP false-exit detour (detourX = x + width + 70).
+        double leftMargin  = 55 + 10;   // back-edge detour + padding
+        double rightMargin = 70 + 10;   // LOOP exit detour + padding
+        double vertPad     = 14;
+        result.streamGroups.add(new StreamGroup(
+                loopNode.x - leftMargin,
+                loopNode.y - vertPad,
+                loopNode.width + leftMargin + rightMargin,
+                (terminalNode.y + terminalNode.height) - loopNode.y + 2 * vertPad
+        ));
+
+        return new StreamExpansion(initNode, terminalNode, loopNode);
+    }
+
+    // ── End stream expansion ─────────────────────────────────────────────────
 
     private FlowNode createProcessNode(Statement stmt, double x, double y, double width, double height) {
         NodeType type = stmt instanceof ReturnStmt ? NodeType.END : NodeType.PROCESS;

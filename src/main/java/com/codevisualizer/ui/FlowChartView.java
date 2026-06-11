@@ -3,6 +3,7 @@ package com.codevisualizer.ui;
 import com.codevisualizer.enums.NodeType;
 import com.codevisualizer.model.FlowEdge;
 import com.codevisualizer.model.FlowNode;
+import com.codevisualizer.model.StreamGroup;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.geometry.Bounds;
@@ -26,6 +27,7 @@ public class FlowChartView {
 
     private List<FlowNode> currentNodes;
     private List<FlowEdge> currentEdges;
+    private List<StreamGroup> currentStreamGroups = new ArrayList<>();
     private String currentMethodName;
     private final Pane root = new Pane();
     private final Group contentGroup = new Group();
@@ -67,18 +69,25 @@ public class FlowChartView {
         nodeShapes.clear();
         edgeLines.clear();
         dbSymbolShapes.clear();
+        currentStreamGroups.clear();
         currentMethodName = null;
     }
 
-    public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges, String methodName) {
+    public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges, String methodName,
+                         List<StreamGroup> streamGroups) {
         clear();
         this.currentNodes = nodes;
         this.currentEdges = edges;
         this.currentMethodName = methodName;
+        this.currentStreamGroups = streamGroups != null ? streamGroups : new ArrayList<>();
         logger.info("Starting to draw flow... ");
 
         if (methodName != null && !nodes.isEmpty()) {
-            drawMethodBox(nodes, methodName);
+            drawMethodBox(nodes, methodName, currentStreamGroups);
+        }
+
+        for (StreamGroup sg : currentStreamGroups) {
+            drawStreamGroupBox(sg);
         }
 
         for (FlowEdge edge : edges) {
@@ -88,11 +97,16 @@ public class FlowChartView {
             FlowNode to = findNodeById(nodes, edge.toId);
             if (from == null || to == null) continue;
 
-            List<Line> segments = drawEdge(from, to, edge.label);
+            List<Line> segments = drawEdge(from, to, edge.label, edge.isBackEdge);
             edgeLines.put(edge.fromId + "->" + edge.toId, segments);
             contentGroup.getChildren().addAll(segments);
 
-            if (edge.label != null && !edge.label.isBlank()) {
+            // Show label unless: it's a LOOP exit (handled visually by the routing),
+            // or it's a back-edge from a non-DECISION node (PROCESS back-edges are self-evident).
+            boolean showLabel = edge.label != null && !edge.label.isBlank()
+                    && from.type != NodeType.LOOP
+                    && (!edge.isBackEdge || from.type == NodeType.DECISION);
+            if (showLabel) {
                 contentGroup.getChildren().add(createEdgeLabel(from, to, edge.label));
             }
         }
@@ -393,12 +407,34 @@ public class FlowChartView {
         }
     }
 
-    private void drawMethodBox(List<FlowNode> nodes, String methodName) {
+    private void drawStreamGroupBox(StreamGroup sg) {
+        Rectangle box = new Rectangle(sg.x, sg.y, sg.width, sg.height);
+        box.setFill(Color.web("#EEF4FF"));
+        box.setStroke(Color.STEELBLUE);
+        box.setStrokeWidth(1.5);
+        box.getStrokeDashArray().addAll(6.0, 4.0);
+
+        Text label = new Text(sg.x + 6, sg.y + 13, "stream");
+        label.setFill(Color.STEELBLUE);
+        label.setStyle("-fx-font-size: 10;");
+
+        contentGroup.getChildren().addAll(box, label);
+    }
+
+    private void drawMethodBox(List<FlowNode> nodes, String methodName, List<StreamGroup> streamGroups) {
         double pad = 24;
         double minX = nodes.stream().mapToDouble(n -> n.x).min().orElse(0) - pad;
         double minY = nodes.stream().mapToDouble(n -> n.y).min().orElse(0) - pad - 16; // extra room for label
         double maxX = nodes.stream().mapToDouble(n -> n.x + n.width).max().orElse(0) + pad;
         double maxY = nodes.stream().mapToDouble(n -> n.y + n.height).max().orElse(0) + pad;
+
+        // Expand to contain any stream group boxes (which extend beyond node bounds)
+        for (StreamGroup sg : streamGroups) {
+            minX = Math.min(minX, sg.x - 8);
+            maxX = Math.max(maxX, sg.x + sg.width + 8);
+            minY = Math.min(minY, sg.y - 8);
+            maxY = Math.max(maxY, sg.y + sg.height + 8);
+        }
 
         Rectangle box = new Rectangle(minX, minY, maxX - minX, maxY - minY);
         box.setFill(Color.TRANSPARENT);
@@ -412,23 +448,65 @@ public class FlowChartView {
         contentGroup.getChildren().addAll(box, label);
     }
 
-    private List<Line> drawEdge(FlowNode from, FlowNode to, String label) {
+    private List<Line> drawEdge(FlowNode from, FlowNode to, String label, boolean isBackEdge) {
         logger.info("Drawing connecting LINE from [{}] to [{}], fromType:{} - toType:{} | with Line Label: {}",
                 from.label, to.label, from.type, to.type, label);
         List<Line> lines = new ArrayList<>();
+
+        // Back-edge: goes LEFT then UP then RIGHT into the loop header.
+        // DECISION back-edges stay inner (closer to nodes); PROCESS back-edges go further out.
+        if (isBackEdge) {
+            double detourX  = from.type == NodeType.DECISION
+                    ? from.x - 30
+                    : from.x - 55;
+            double fromMidY = from.y + from.height / 2.0;
+            double toMidY   = to.y   + to.height   / 2.0;
+            lines.add(createLine(from.x,   fromMidY, detourX, fromMidY));
+            lines.add(createLine(detourX,  fromMidY, detourX, toMidY));
+            lines.add(createLine(detourX,  toMidY,   to.x,    toMidY));
+            return lines;
+        }
+
+        // LOOP node false-exit: detour RIGHT, enter terminal from its right side at mid-height
+        if (from.type == NodeType.LOOP && "False".equalsIgnoreCase(label)) {
+            double startX  = from.x + from.width;
+            double startY  = from.y + from.height / 2.0;
+            double detourX = from.x + from.width + 70;
+            double endX    = to.x + to.width;           // right edge of terminal
+            double endY    = to.y + to.height / 2.0;    // mid-height of terminal
+            lines.add(createLine(startX,  startY, detourX, startY));
+            lines.add(createLine(detourX, startY, detourX, endY));
+            lines.add(createLine(detourX, endY,   endX,    endY));
+            return lines;
+        }
 
         if (from.type == NodeType.DECISION) {
 
             double startY = from.y + (from.height / 2);
 
             if ("True".equalsIgnoreCase(label) || "Yes".equalsIgnoreCase(label)) {
-                logger.info("Draw DECISION Line RIGHT");
-                double startX = from.x + from.width;
-                double endX = to.x + (to.width / 2);
-                double endY = to.y;
-
-                lines.add(createLine(startX, startY, endX, startY));
-                lines.add(createLine(endX, startY, endX, endY));
+                double fromCX = from.x + from.width / 2.0;
+                double toCX   = to.x   + to.width   / 2.0;
+                if (toCX > fromCX + 10) {
+                    // Target is to the right (if/else branch): go RIGHT then DOWN
+                    logger.info("Draw DECISION Line RIGHT");
+                    double startX = from.x + from.width;
+                    lines.add(createLine(startX, startY, toCX, startY));
+                    lines.add(createLine(toCX, startY, toCX, to.y));
+                } else {
+                    // Target is directly below (stream filter pass): go straight DOWN
+                    logger.info("Draw DECISION True Line DOWN");
+                    double fromX = from.x + from.width / 2.0;
+                    double fromY = from.y + from.height;
+                    if (Math.abs(fromX - toCX) < 0.5) {
+                        lines.add(createLine(fromX, fromY, toCX, to.y));
+                    } else {
+                        double midY = (fromY + to.y) / 2.0;
+                        lines.add(createLine(fromX, fromY, fromX, midY));
+                        lines.add(createLine(fromX, midY, toCX, midY));
+                        lines.add(createLine(toCX, midY, toCX, to.y));
+                    }
+                }
                 return lines;
             }
 
@@ -500,11 +578,27 @@ public class FlowChartView {
 
         if (from.type == NodeType.DECISION) {
             if ("True".equalsIgnoreCase(label) || "Yes".equalsIgnoreCase(label)) {
-                x = from.x + from.width + 5;
-                y = from.y + (from.height / 2) - 8;
+                double fromCX = from.x + from.width / 2.0;
+                double toCX   = to.x   + to.width   / 2.0;
+                if (toCX > fromCX + 10) {
+                    // Right branch: label beside the right exit point of the diamond
+                    x = from.x + from.width + 5;
+                    y = from.y + (from.height / 2) - 8;
+                } else {
+                    // Down branch (stream filter): label just below-right of diamond bottom
+                    x = from.x + from.width / 2 + 8;
+                    y = from.y + from.height + 16;
+                }
             } else if ("False".equalsIgnoreCase(label) || "No".equalsIgnoreCase(label)) {
-                x = from.x + (from.width / 2) + 8;
-                y = from.y + from.height + 16;
+                if (to.y < from.y) {
+                    // Back-edge going up: label at left side of diamond, on the horizontal segment
+                    x = from.x - 28;
+                    y = from.y + from.height / 2 - 6;
+                } else {
+                    // Normal False going down: label below-right of diamond bottom
+                    x = from.x + (from.width / 2) + 8;
+                    y = from.y + from.height + 16;
+                }
             } else {
                 x = (from.x + to.x) / 2;
                 y = (from.y + to.y) / 2;
@@ -529,7 +623,26 @@ public class FlowChartView {
             );
         }
 
+        if (node.type == NodeType.LOOP) {
+            double indent = node.width * 0.15;
+            double cy = node.y + node.height / 2.0;
+            return new Polygon(
+                    node.x + indent,               node.y,
+                    node.x + node.width - indent,  node.y,
+                    node.x + node.width,            cy,
+                    node.x + node.width - indent,  node.y + node.height,
+                    node.x + indent,               node.y + node.height,
+                    node.x,                        cy
+            );
+        }
+
         if (node.type == NodeType.END) {
+            if (node.label.toLowerCase().startsWith("return")) {
+                Rectangle rounded = new Rectangle(node.x, node.y, node.width, node.height);
+                rounded.setArcWidth(20);
+                rounded.setArcHeight(20);
+                return rounded;
+            }
             return new Ellipse(
                     node.x + node.width / 2.0,
                     node.y + node.height / 2.0,
@@ -588,11 +701,18 @@ public class FlowChartView {
         // ── Nodes + database symbols ──────────────────────────────────────
         int dbIdx = 0;
         for (FlowNode node : currentNodes) {
-            String nodeStyle = node.type == NodeType.DECISION
-                    ? "rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;"
-                    : node.type == NodeType.END
-                    ? "ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;"
-                    : "rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
+            String nodeStyle;
+            if (node.type == NodeType.DECISION) {
+                nodeStyle = "rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
+            } else if (node.type == NodeType.LOOP) {
+                nodeStyle = "shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
+            } else if (node.type == NodeType.END && node.label.toLowerCase().startsWith("return")) {
+                nodeStyle = "rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
+            } else if (node.type == NodeType.END) {
+                nodeStyle = "ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
+            } else {
+                nodeStyle = "rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;";
+            }
 
             xml.append("        <mxCell id=\"").append(node.id)
                     .append("\" value=\"").append(xmlEscape(node.label))
@@ -642,7 +762,24 @@ public class FlowChartView {
             if (from == null || to == null) continue;
 
             String label = edge.label != null ? edge.label : "";
+
+            if (edge.isBackEdge) {
+                xml.append("        <mxCell id=\"").append(edge.key())
+                        .append("\" value=\"\" style=\"edgeStyle=orthogonalEdgeStyle;")
+                        .append("exitX=0;exitY=0.5;exitDx=0;exitDy=0;")
+                        .append("entryX=0;entryY=0.5;entryDx=0;entryDy=0;")
+                        .append("rounded=0;orthogonalLoop=1;html=1;\"")
+                        .append(" source=\"").append(edge.fromId)
+                        .append("\" target=\"").append(edge.toId)
+                        .append("\" edge=\"1\" parent=\"1\">\n");
+                xml.append("          <mxGeometry relative=\"1\" as=\"geometry\"/>\n");
+                xml.append("        </mxCell>\n");
+                continue;
+            }
+
             String exitPoint  = (from.type == NodeType.DECISION && "True".equalsIgnoreCase(label))
+                    ? "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
+                    : (from.type == NodeType.LOOP && "False".equalsIgnoreCase(label))
                     ? "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
                     : "exitX=0.5;exitY=1;exitDx=0;exitDy=0;";
             String entryPoint = "entryX=0.5;entryY=0;entryDx=0;entryDy=0;";

@@ -10,8 +10,8 @@ if (x > 0) {
 
 --- Sample 2: if-else with multiple statements ---
 
-int x = 5;
-if (x > 0) {
+int x = 4;
+if (x < 5) {
     x++;
     y = 50;
 } else {
@@ -29,7 +29,7 @@ x--;
 } else {
 x = 0;
 }
-if (y < 10) {
+if (y <= 10) {
 y++;
 } else {
 y = 10;
@@ -78,6 +78,24 @@ if (isValid) {
     logInvalidOrder(orderId);
 }
 sendConfirmation(customerId);
+}
+
+
+--- Sample 7: score summary with streaming and ternary ---
+
+public int summarizeScores(int threshold) {
+    List<Integer> scores = Arrays.asList(85, 42, 90, 61, 78);
+    int passing = (int) scores.stream()
+            .filter(s -> s >= threshold)    // Embedded filtering logic
+            .map(s -> s * 2)                // Embedded mapping logic
+            .mapToInt(s -> {                // Embedded block of code
+                int bonus = s > 80 ? 10 : 0;
+                return s + bonus;
+            })
+            .count();
+    int failing = scores.size() - passing;
+    int result = (passing > failing) ? passing : -failing;
+    return result;
 }
 
 */

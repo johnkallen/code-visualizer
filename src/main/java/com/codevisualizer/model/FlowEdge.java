@@ -6,6 +6,7 @@ public class FlowEdge {
     public String fromId;
     public String toId;
     public String label;
+    public boolean isBackEdge = false;
     private final String id;
 
     public FlowEdge(String fromId, String toId, String label) {

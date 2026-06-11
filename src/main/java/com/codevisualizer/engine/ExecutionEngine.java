@@ -44,6 +44,8 @@ public class ExecutionEngine {
     public void reset() {
         context.currentNodeId = firstNodeId;
         context.finished = (firstNodeId == null);
+        context.loopElements.clear();
+        context.loopIndex.clear();
         phase = Phase.SHOW_NODE;
         pendingNextNodeId = null;
     }
@@ -93,6 +95,42 @@ public class ExecutionEngine {
         mockReturnValues.put(methodName, value);
     }
 
+    public Map<String, Object> getMockReturnValues() {
+        return Collections.unmodifiableMap(mockReturnValues);
+    }
+
+    /** True if this DECISION's false-exit leads back to a LOOP (stream filter pattern). */
+    private boolean isStreamFilter(FlowNode decision) {
+        if (decision.falseNextId == null) return false;
+        FlowNode falseTarget = nodesById.get(decision.falseNextId);
+        return falseTarget != null && falseTarget.type == com.codevisualizer.enums.NodeType.LOOP;
+    }
+
+    /** When a stream filter passes, increment the terminal's mock return value (e.g. count). */
+    private void incrementStreamCount(FlowNode filterDecision) {
+        FlowNode loopNode = nodesById.get(filterDecision.falseNextId);
+        if (loopNode == null) return;
+        String key = terminalCountKey(loopNode);
+        if (key != null) mockReturnValues.merge(key, 1, (a, b) -> toInt(a) + 1);
+    }
+
+    /** Resets the terminal count to 0 when the loop starts a new pass. */
+    private void resetStreamTerminalCount(FlowNode loopNode) {
+        String key = terminalCountKey(loopNode);
+        if (key != null) mockReturnValues.put(key, 0);
+    }
+
+    /** Extracts the method name from the terminal node's expression, e.g. "count" from "passing = count()". */
+    private String terminalCountKey(FlowNode loopNode) {
+        if (loopNode.falseNextId == null) return null;
+        FlowNode terminal = nodesById.get(loopNode.falseNextId);
+        if (terminal == null || terminal.expression == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(\\w+)\\(\\)\\s*$")
+                .matcher(terminal.expression);
+        return m.find() ? m.group(1) : null;
+    }
+
     public void setVariable(String name, Object value) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("Variable name cannot be blank.");
@@ -110,9 +148,30 @@ public class ExecutionEngine {
             case DECISION -> {
                 boolean result = evaluateCondition(node.condition);
                 pendingNextNodeId = result ? node.trueNextId : node.falseNextId;
-                if (pendingNextNodeId == null) {
-                    context.finished = true;
+                if (result && isStreamFilter(node)) incrementStreamCount(node);
+                if (pendingNextNodeId == null) context.finished = true;
+            }
+            case LOOP -> {
+                // Initialise element list on first visit
+                if (!context.loopElements.containsKey(node.id)) {
+                    context.loopElements.put(node.id, parseLoopElements(node));
+                    context.loopIndex.put(node.id, 0);
+                    resetStreamTerminalCount(node);
                 }
+                List<Object> elements = context.loopElements.get(node.id);
+                int idx = context.loopIndex.get(node.id);
+                if (idx < elements.size()) {
+                    // Set loop variable to current element and advance index
+                    setLoopParam(node, elements.get(idx));
+                    context.loopIndex.put(node.id, idx + 1);
+                    pendingNextNodeId = node.trueNextId;
+                } else {
+                    // All elements consumed — exit loop
+                    context.loopElements.remove(node.id);
+                    context.loopIndex.remove(node.id);
+                    pendingNextNodeId = node.falseNextId;
+                }
+                if (pendingNextNodeId == null) context.finished = true;
             }
             case END -> {
                 pendingNextNodeId = null;
@@ -153,6 +212,28 @@ public class ExecutionEngine {
             return;
         }
 
+        // Non-primitive typed declaration: e.g. List<Integer> scores = Arrays.asList(...)
+        // Extract variable name as the last word before '='
+        if (expr.contains("=")) {
+            int eqIdx = expr.indexOf('=');
+            boolean isCompound = eqIdx > 0 && "!=<>".indexOf(expr.charAt(eqIdx - 1)) >= 0;
+            boolean isDoubleEq = eqIdx + 1 < expr.length() && expr.charAt(eqIdx + 1) == '=';
+            if (!isCompound && !isDoubleEq) {
+                String lhs = expr.substring(0, eqIdx).trim();
+                java.util.regex.Matcher lastWord = java.util.regex.Pattern
+                        .compile("(\\w+)$").matcher(lhs);
+                if (lastWord.find()) {
+                    String varName = lastWord.group(1);
+                    if (context.variables.containsKey(varName) && lhs.contains(" ")) {
+                        String valueExpr = expr.substring(eqIdx + 1).trim();
+                        Object value = evaluateExpression(valueExpr);
+                        if (value != null) context.variables.put(varName, value);
+                        return;
+                    }
+                }
+            }
+        }
+
         if (expr.matches("^\\w+\\s*=.*$")) {
             String[] parts = expr.split("=", 2);
             String varName = parts[0].trim();
@@ -178,6 +259,32 @@ public class ExecutionEngine {
         }
     }
 
+    /** Parses the source collection from the LOOP label into an ordered list of elements. */
+    private List<Object> parseLoopElements(FlowNode loopNode) {
+        List<Object> elements = new java.util.ArrayList<>();
+        if (loopNode.label == null) return elements;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("for each (\\w+) in (\\w+)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(loopNode.label);
+        if (!m.find()) return elements;
+        Object sourceVal = context.variables.get(m.group(2));
+        if (sourceVal == null) return elements;
+        for (String token : sourceVal.toString().split(",")) {
+            String t = token.trim();
+            try { elements.add(Integer.parseInt(t)); }
+            catch (NumberFormatException e) { elements.add(t); }
+        }
+        return elements;
+    }
+
+    /** Sets the loop param variable (e.g. "s") to the given element value. */
+    private void setLoopParam(FlowNode loopNode, Object value) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("for each (\\w+) in", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(loopNode.label != null ? loopNode.label : "");
+        if (m.find()) context.variables.put(m.group(1), value);
+    }
+
     private Object evaluateExpression(String expr) {
         expr = expr.trim();
 
@@ -200,6 +307,44 @@ public class ExecutionEngine {
         if (expr.matches("^\\w+\\s*\\(.*\\)$")) {
             String methodName = expr.substring(0, expr.indexOf('(')).trim();
             return mockReturnValues.get(methodName);
+        }
+
+        // Scoped method call: e.g. Arrays.asList(...), scores.size()
+        // Only match when the ENTIRE expression is a method call (ends with ')'),
+        // so that "scores.size() - passing" falls through to the arithmetic split.
+        if (expr.matches("^[\\w.]+\\.\\w+\\(.*\\)$")) {
+            int firstParen = expr.indexOf('(');
+            int lastDot = expr.lastIndexOf('.', firstParen);
+            if (lastDot >= 0) {
+                String scope      = expr.substring(0, lastDot).trim();
+                String methodName = expr.substring(lastDot + 1, firstParen).trim();
+                // size()/length() on a variable stored as a comma-separated string
+                if (("size".equals(methodName) || "length".equals(methodName))
+                        && context.variables.containsKey(scope)) {
+                    Object val = context.variables.get(scope);
+                    if (val == null) return 0;
+                    String s = val.toString().trim();
+                    return s.isEmpty() ? 0 : s.split(",").length;
+                }
+                if (mockReturnValues.containsKey(methodName)) {
+                    return mockReturnValues.get(methodName);
+                }
+            }
+        }
+
+        // Ternary: condition ? trueExpr : falseExpr  (must precede arithmetic splits)
+        int qIdx = expr.indexOf('?');
+        if (qIdx > 0) {
+            String cond = expr.substring(0, qIdx).trim();
+            String rest = expr.substring(qIdx + 1);
+            int cIdx = rest.indexOf(':');
+            if (cIdx >= 0) {
+                String trueExpr  = rest.substring(0, cIdx).trim();
+                String falseExpr = rest.substring(cIdx + 1).trim();
+                return evaluateCondition(cond)
+                        ? evaluateExpression(trueExpr)
+                        : evaluateExpression(falseExpr);
+            }
         }
 
         if (expr.contains("+")) {
@@ -227,6 +372,11 @@ public class ExecutionEngine {
         if (condition == null || condition.isBlank()) return false;
 
         String c = condition.trim();
+
+        // Strip outer parentheses, e.g. "(passing > failing)"
+        while (c.startsWith("(") && c.endsWith(")")) {
+            c = c.substring(1, c.length() - 1).trim();
+        }
 
         // || has lowest precedence — split and short-circuit OR
         if (c.contains("||")) {

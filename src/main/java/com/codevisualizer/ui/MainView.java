@@ -183,7 +183,7 @@ public class MainView {
             engine = new ExecutionEngine(lastResult.flowNodes, lastResult.variables, lastResult.mockReturnValues);
             variablePanel.updateVariables(engine.getVariables());
             variablePanel.updateMockReturnValues(lastResult.mockReturnValues);
-            flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges, lastResult.methodName);
+            flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges, lastResult.methodName, lastResult.streamGroups);
 
             statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
 
@@ -236,6 +236,7 @@ public class MainView {
         StepEvent event = engine.step();
         flowChartView.clearHighlights();
         variablePanel.updateVariables(engine.getVariables());
+        variablePanel.updateMockReturnValues(engine.getMockReturnValues());
 
         if (event.type == StepEvent.StepType.COMPLETE) {
             applyCodeHighlight(0, 0);
