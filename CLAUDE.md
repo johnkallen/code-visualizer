@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Permissions
+
+- **Run anything freely** — compile, run, read, edit, create, or delete files within this repo without asking for permission.
+- **Never commit** — do not run `git commit` under any circumstances. The user reviews all changes and commits manually, which allows rollback of any unwanted changes.
+
 ## Build & Run
 
 ```bash
