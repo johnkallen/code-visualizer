@@ -17,6 +17,7 @@ import org.fxmisc.richtext.CodeArea;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -31,7 +32,10 @@ public class MainView {
 
     private ExecutionEngine engine;
     private CodeParser.ParseResult lastResult;
+    private String lastCode;
     private final Button stepBtn;
+    private final ComboBox<String> methodSelector = new ComboBox<>();
+    private final Label methodLabel = new Label("Method:");
 
     public MainView() {
 
@@ -79,14 +83,33 @@ public class MainView {
         variableContainer.getChildren().addAll(varLabel, variablePanel.getView());
         variableContainer.setStyle("-fx-padding: 5; -fx-background-color: #f0f0f0;");
 
+        // Method selector — hidden until a multi-method class is loaded
+        methodLabel.setStyle("-fx-font-weight: bold; -fx-padding: 0 4 0 10;");
+        methodLabel.setVisible(false);
+        methodLabel.setManaged(false);
+        methodSelector.setPrefWidth(220);
+        methodSelector.setVisible(false);
+        methodSelector.setManaged(false);
+        methodSelector.setOnAction(e -> {
+            String sig = methodSelector.getValue();
+            if (sig != null && lastCode != null) {
+                String name = sig.contains("(") ? sig.substring(0, sig.indexOf('(')) : sig;
+                visualizeMethod(name);
+            }
+        });
+
         // Create HBox for controls
         stepBtn = new Button("Step");
+        Button visualizeBtn = new Button("Visualize");
+        Button fitBtn = new Button("Fit");
         Button clearBtn = new Button("Clear");
         HBox controls = new HBox(10);
         controls.getChildren().addAll(
-                new Button("Visualize"),
+                visualizeBtn,
+                methodLabel,
+                methodSelector,
                 stepBtn,
-                new Button("Fit"),
+                fitBtn,
                 clearBtn,
                 statusLabel
         );
@@ -109,9 +132,9 @@ public class MainView {
         root.setCenter(split);
         root.setBottom(controls);
 
-        ((Button) controls.getChildren().get(0)).setOnAction(e -> analyzeCode());
-        ((Button) controls.getChildren().get(1)).setOnAction(e -> step());
-        ((Button) controls.getChildren().get(2)).setOnAction(e -> flowChartView.fitToScreen());
+        visualizeBtn.setOnAction(e -> analyzeCode());
+        stepBtn.setOnAction(e -> step());
+        fitBtn.setOnAction(e -> flowChartView.fitToScreen());
         clearBtn.setOnAction(e -> clearAll());
 
         exportBtn.setOnAction(e -> {
@@ -176,16 +199,43 @@ public class MainView {
         try {
             String formatted = formatCode(codeEditor.getText());
             codeEditor.replaceText(formatted);
+            // replaceText clears all style spans; reapply highlighting explicitly because
+            // the textProperty listener only fires when the text *changes*, so identical
+            // content after formatting leaves the editor unstyled.
+            if (!formatted.isEmpty()) {
+                codeEditor.setStyleSpans(0, JavaSyntaxHighlighter.computeHighlighting(formatted));
+            }
+            lastCode = formatted;
 
+            // Discover all methods in the pasted code
             CodeParser parser = new CodeParser();
-            lastResult = parser.parse(formatted);
+            List<String> signatures = parser.parseMethodSignatures(formatted);
 
-            engine = new ExecutionEngine(lastResult.flowNodes, lastResult.variables, lastResult.mockReturnValues);
-            variablePanel.updateVariables(engine.getVariables());
-            variablePanel.updateMockReturnValues(lastResult.mockReturnValues);
-            flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges, lastResult.methodName, lastResult.streamGroups);
-
-            statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
+            if (signatures.size() > 1) {
+                // Multi-method class: show selector and let it trigger visualizeMethod
+                methodSelector.setOnAction(null); // suppress during repopulation
+                methodSelector.getItems().setAll(signatures);
+                methodLabel.setVisible(true);
+                methodLabel.setManaged(true);
+                methodSelector.setVisible(true);
+                methodSelector.setManaged(true);
+                methodSelector.setValue(signatures.get(0));
+                methodSelector.setOnAction(e -> {
+                    String sig = methodSelector.getValue();
+                    if (sig != null && lastCode != null) {
+                        String name = sig.contains("(") ? sig.substring(0, sig.indexOf('(')) : sig;
+                        visualizeMethod(name);
+                    }
+                });
+                // Visualize the first method immediately
+                String firstName = signatures.get(0);
+                firstName = firstName.contains("(") ? firstName.substring(0, firstName.indexOf('(')) : firstName;
+                visualizeMethod(firstName);
+            } else {
+                // Single method or bare code: hide selector and visualize directly
+                hideMethodSelector();
+                visualizeMethod(null);
+            }
 
         } catch (Exception ex) {
             engine = null;
@@ -197,25 +247,61 @@ public class MainView {
         }
     }
 
+    /** Parses and renders the named method (null = first/only method). */
+    private void visualizeMethod(String targetMethodName) {
+        try {
+            CodeParser parser = new CodeParser();
+            lastResult = parser.parse(lastCode, targetMethodName);
+
+            engine = new ExecutionEngine(lastResult.flowNodes, lastResult.variables, lastResult.mockReturnValues);
+            variablePanel.updateVariables(engine.getVariables());
+            variablePanel.updateMockReturnValues(lastResult.mockReturnValues);
+            flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges,
+                    lastResult.methodName, lastResult.streamGroups);
+            stepBtn.setDisable(false);
+            statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
+
+        } catch (Exception ex) {
+            engine = null;
+            lastResult = null;
+            variablePanel.clear();
+            flowChartView.clear();
+            statusLabel.setText("Visualize failed: " + ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+
+    private void hideMethodSelector() {
+        methodLabel.setVisible(false);
+        methodLabel.setManaged(false);
+        methodSelector.setVisible(false);
+        methodSelector.setManaged(false);
+        methodSelector.getItems().clear();
+    }
+
     private String formatCode(String code) {
         try {
             String wrapped = wrapForParsing(code);
             CompilationUnit cu = StaticJavaParser.parse(wrapped);
+
+            // Full class with multiple methods — return the whole class as-is
+            if (cu.findAll(MethodDeclaration.class).size() > 1) {
+                return code;
+            }
+
             Optional<MethodDeclaration> method = cu.findFirst(MethodDeclaration.class);
             if (method.isEmpty() || method.get().getBody().isEmpty()) return code;
 
             MethodDeclaration m = method.get();
 
-            // If the user provided a method declaration, return the full formatted method
+            // Single named method — return the formatted method declaration
             if (!"temp".equals(m.getNameAsString())) {
                 return m.toString();
             }
 
-            // Bare code — extract and return just the body
+            // Bare code block — strip the temp wrapper and return just the body
             String body = m.getBody().get().toString();
-            // Strip outer { }
             body = body.substring(body.indexOf('{') + 1, body.lastIndexOf('}')).stripTrailing();
-            // Dedent one level (JavaParser indents with 4 spaces)
             String[] lines = body.split("\n");
             StringBuilder sb = new StringBuilder();
             for (String line : lines) {
@@ -292,8 +378,10 @@ public class MainView {
         codeEditor.clear();
         flowChartView.clear();
         variablePanel.clear();
+        hideMethodSelector();
         engine = null;
         lastResult = null;
+        lastCode = null;
         statusLabel.setText("Paste code and click Visualize.");
     }
 }

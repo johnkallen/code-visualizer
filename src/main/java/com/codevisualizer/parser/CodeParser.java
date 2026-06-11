@@ -55,22 +55,56 @@ public class CodeParser {
         }
     }
 
-    public ParseResult parse(String code) {
+    /** Wraps bare code or a bare method in a throwaway class so JavaParser can parse it. */
+    private String wrapIfNeeded(String code) {
+        if (code.contains("class")) return code;
+        String first = code.trim().split("\\s+")[0];
+        boolean isMethodDecl = first.equals("public") || first.equals("private")
+                || first.equals("protected") || first.equals("static") || first.equals("void");
+        return isMethodDecl ? "class Temp { " + code + " }"
+                            : "class Temp { void temp() { " + code + " } }";
+    }
+
+    /**
+     * Returns the display signatures of every method in the pasted code,
+     * e.g. ["getUser(int id)", "createUser(String name, int age)"].
+     * Used to populate the method selector before full parsing.
+     */
+    public List<String> parseMethodSignatures(String code) {
+        List<String> signatures = new ArrayList<>();
+        try {
+            CompilationUnit cu = StaticJavaParser.parse(wrapIfNeeded(code));
+            for (MethodDeclaration m : cu.findAll(MethodDeclaration.class)) {
+                if ("temp".equals(m.getNameAsString())) continue;
+                List<String> params = new ArrayList<>();
+                m.getParameters().forEach(p ->
+                        params.add(p.getType().asString() + " " + p.getNameAsString()));
+                signatures.add(m.getNameAsString() + "(" + String.join(", ", params) + ")");
+            }
+        } catch (Exception ignored) {}
+        return signatures;
+    }
+
+
+    /**
+     * Parses {@code targetMethodName} from the code and builds the flowchart model.
+     * If {@code targetMethodName} is null, the first method found is used.
+     */
+    public ParseResult parse(String code, String targetMethodName) {
         logger.info("\nStarting to parse code: \n{}", code);
         ParseResult result = new ParseResult();
 
-        if (!code.contains("class")) {
-            String first = code.trim().split("\\s+")[0];
-            boolean isMethodDecl = first.equals("public") || first.equals("private")
-                    || first.equals("protected") || first.equals("static") || first.equals("void");
-            code = isMethodDecl ? "class Temp { " + code + " }"
-                                : "class Temp { void temp() { " + code + " } }";
-        }
+        code = wrapIfNeeded(code);
 
         try {
             CompilationUnit cu = StaticJavaParser.parse(code);
 
-            Optional<MethodDeclaration> methodOpt = cu.findFirst(MethodDeclaration.class);
+            Optional<MethodDeclaration> methodOpt = (targetMethodName == null)
+                    ? cu.findFirst(MethodDeclaration.class)
+                    : cu.findAll(MethodDeclaration.class).stream()
+                            .filter(m -> m.getNameAsString().equals(targetMethodName))
+                            .findFirst();
+
             if (methodOpt.isEmpty() || methodOpt.get().getBody().isEmpty()) return result;
 
             MethodDeclaration method = methodOpt.get();
@@ -83,7 +117,8 @@ public class CodeParser {
                     result.variables.put(p.getNameAsString(), defaultValue(p.getType().asString()))
             );
 
-            cu.findAll(VariableDeclarator.class).forEach(v -> {
+            // Scope variable discovery to this method only (not the whole class)
+            method.findAll(VariableDeclarator.class).forEach(v -> {
                 result.variables.put(v.getNameAsString(), defaultValue(v.getType().asString()));
                 v.getInitializer().ifPresent(init -> {
                     if (init instanceof MethodCallExpr mce) {
@@ -223,11 +258,13 @@ public class CodeParser {
             result.flowEdges.add(new FlowEdge(decision.id, falseBranch.first.id, "False"));
         }
 
-        List<FlowNode> exits = new ArrayList<>(trueBranch.exits);
+        // END (return) nodes are terminal — never wire them to what follows
+        List<FlowNode> exits = new ArrayList<>();
+        trueBranch.exits.stream().filter(n -> n.type != NodeType.END).forEach(exits::add);
         if (falseBranch.exits.isEmpty()) {
             exits.add(decision); // no-else: decision is the false exit point
         } else {
-            exits.addAll(falseBranch.exits);
+            falseBranch.exits.stream().filter(n -> n.type != NodeType.END).forEach(exits::add);
         }
 
         return new Pair<>(decision, exits);
@@ -268,7 +305,10 @@ public class CodeParser {
                 currentExits.clear();
 
                 layout.currentY += layout.verticalGap;
-                currentExits.add(node);
+                // END (return) nodes are terminal — don't wire them to what follows
+                if (node.type != NodeType.END) {
+                    currentExits.add(node);
+                }
             }
         }
 
