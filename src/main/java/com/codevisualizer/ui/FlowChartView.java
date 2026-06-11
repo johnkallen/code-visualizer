@@ -32,6 +32,7 @@ public class FlowChartView {
 
     private final Map<String, Shape> nodeShapes = new HashMap<>();
     private final Map<String, List<Line>> edgeLines = new HashMap<>();
+    private final Map<String, List<Shape>> dbSymbolShapes = new HashMap<>();
 
     private double scale = 1.0;
     private double lastPanX;
@@ -65,6 +66,7 @@ public class FlowChartView {
         contentGroup.getChildren().clear();
         nodeShapes.clear();
         edgeLines.clear();
+        dbSymbolShapes.clear();
         currentMethodName = null;
     }
 
@@ -150,6 +152,8 @@ public class FlowChartView {
                     line.setStrokeWidth(2);
                 })
         );
+
+        dbSymbolShapes.values().forEach(this::resetDbShapes);
     }
 
     public void showEndOverlay(Runnable onComplete) {
@@ -191,6 +195,7 @@ public class FlowChartView {
                 line.setStrokeWidth(4);
             });
         }
+        highlightDbSymbol(fromId);
     }
 
     public void resetView() {
@@ -348,6 +353,44 @@ public class FlowChartView {
         dbLabel.setY(dbTopY + ry + (dbH - 2 * ry) / 2.0 + 5);
 
         contentGroup.getChildren().addAll(connector, body, leftSide, rightSide, topCap, bottomArc, dbLabel);
+        dbSymbolShapes.put(node.id, List.of(connector, body, leftSide, rightSide, topCap, bottomArc));
+    }
+
+    private void highlightDbSymbol(String nodeId) {
+        List<Shape> shapes = dbSymbolShapes.get(nodeId);
+        if (shapes == null) return;
+        for (Shape s : shapes) {
+            if (s instanceof Rectangle) {
+                s.setFill(Color.web("#FFF3CD"));
+            } else if (s instanceof Ellipse) {
+                s.setFill(Color.web("#FFF3CD"));
+                s.setStroke(Color.ORANGE);
+                s.setStrokeWidth(1.5);
+            } else {
+                s.setStroke(Color.ORANGE);
+                s.setStrokeWidth(1.5);
+            }
+        }
+    }
+
+    private void resetDbShapes(List<Shape> shapes) {
+        for (Shape s : shapes) {
+            if (s instanceof Rectangle) {
+                s.setFill(Color.WHITE);
+                s.setStroke(Color.TRANSPARENT);
+            } else if (s instanceof Ellipse) {
+                s.setFill(Color.WHITE);
+                s.setStroke(Color.BLACK);
+                s.setStrokeWidth(1.5);
+            } else if (s instanceof Arc) {
+                s.setFill(Color.TRANSPARENT);
+                s.setStroke(Color.BLACK);
+                s.setStrokeWidth(1.5);
+            } else {
+                s.setStroke(Color.BLACK);
+                s.setStrokeWidth(1.5);
+            }
+        }
     }
 
     private void drawMethodBox(List<FlowNode> nodes, String methodName) {
