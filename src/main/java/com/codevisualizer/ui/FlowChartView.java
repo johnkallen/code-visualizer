@@ -39,6 +39,11 @@ public class FlowChartView {
     private final Map<String, List<Line>> edgeLines = new HashMap<>();
     private final Map<String, List<Shape>> dbSymbolShapes = new HashMap<>();
 
+    // Routing data computed in drawFlow; reused by generateDrawIOXML for exact waypoints.
+    private Map<String, Double>  lastEdgeBusX          = new HashMap<>();
+    private Map<String, Double>  lastEdgeMergeY         = new HashMap<>();
+    private Map<String, Boolean> lastEdgeSingleJoinBack = new HashMap<>();
+
     private double scale = 1.0;
     private double lastPanX;
     private double lastPanY;
@@ -76,6 +81,9 @@ public class FlowChartView {
         currentMethodGroups.clear();
         currentMethodName = null;
         currentClassName  = null;
+        lastEdgeBusX.clear();
+        lastEdgeMergeY.clear();
+        lastEdgeSingleJoinBack.clear();
     }
 
     public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges, String methodName,
@@ -224,6 +232,11 @@ public class FlowChartView {
                         Math.min(Math.max(localMax + 20, srcBottom + 20), tgtTop - 5));
             }
         }
+
+        // Persist routing data so generateDrawIOXML can produce matching waypoints.
+        lastEdgeBusX          = perEdgeBusX;
+        lastEdgeMergeY        = perEdgeMergeY;
+        lastEdgeSingleJoinBack = perEdgeSingleJoinBack;
 
         // ── Draw method / group bounding boxes (now that routingMaxX is known) ──
 
@@ -943,10 +956,64 @@ public class FlowChartView {
         xml.append("        <mxCell id=\"0\"/>\n");
         xml.append("        <mxCell id=\"1\" parent=\"0\"/>\n");
 
+        // ── Class-level enclosing box (outermost, drawn first = behind everything) ──
+        if (!currentMethodGroups.isEmpty() && currentClassName != null) {
+            double clsMinX = Double.MAX_VALUE, clsMinY = Double.MAX_VALUE;
+            double clsMaxX = 0, clsMaxY = 0;
+            for (MethodBox mb : currentMethodGroups) {
+                double mbRoutingMaxX = currentEdges.stream()
+                        .filter(e -> lastEdgeBusX.containsKey(e.fromId + "->" + e.toId))
+                        .filter(e -> {
+                            FlowNode f = findNodeById(currentNodes, e.fromId);
+                            if (f == null) return false;
+                            double cx = f.x + f.width / 2.0, cy = f.y + f.height / 2.0;
+                            return cx >= mb.x && cx <= mb.x + mb.width
+                                    && cy >= mb.y && cy <= mb.y + mb.height;
+                        })
+                        .mapToDouble(e -> lastEdgeBusX.get(e.fromId + "->" + e.toId))
+                        .max().orElse(0);
+                double right = Math.max(mb.x + mb.width, mbRoutingMaxX > 0 ? mbRoutingMaxX + 20 : 0);
+                clsMinX = Math.min(clsMinX, mb.x);
+                clsMinY = Math.min(clsMinY, mb.y);
+                clsMaxX = Math.max(clsMaxX, right);
+                clsMaxY = Math.max(clsMaxY, mb.y + mb.height);
+            }
+            final double CLS_PAD = 30;
+            double clsX = clsMinX - CLS_PAD;
+            double clsY = clsMinY - CLS_PAD - 24;
+            double clsW = clsMaxX - clsMinX + 2 * CLS_PAD;
+            double clsH = clsMaxY - clsMinY + 2 * CLS_PAD + 24;
+            xml.append("        <mxCell id=\"class-box\" value=\"").append(xmlEscape(currentClassName))
+                    .append("\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=none;")
+                    .append("strokeColor=#1a1a2e;strokeWidth=2;")
+                    .append("verticalAlign=top;align=center;fontSize=14;fontStyle=1;fontColor=#1a1a2e;spacingTop=4;")
+                    .append("\" vertex=\"1\" parent=\"1\">\n");
+            xml.append("          <mxGeometry x=\"").append(clsX)
+                    .append("\" y=\"").append(clsY)
+                    .append("\" width=\"").append(clsW)
+                    .append("\" height=\"").append(clsH)
+                    .append("\" as=\"geometry\"/>\n");
+            xml.append("        </mxCell>\n");
+        }
+
         // ── Method box(es) — rendered behind nodes ───────────────────────
         if (!currentMethodGroups.isEmpty()) {
             int mbIdx = 0;
             for (MethodBox mb : currentMethodGroups) {
+                // Mirror drawMethodGroupBox: expand right edge to cover routing lines.
+                final double MB_PAD = 20;
+                double mbRoutingMaxX = currentEdges.stream()
+                        .filter(e -> lastEdgeBusX.containsKey(e.fromId + "->" + e.toId))
+                        .filter(e -> {
+                            FlowNode f = findNodeById(currentNodes, e.fromId);
+                            if (f == null) return false;
+                            double cx = f.x + f.width / 2.0, cy = f.y + f.height / 2.0;
+                            return cx >= mb.x && cx <= mb.x + mb.width
+                                    && cy >= mb.y && cy <= mb.y + mb.height;
+                        })
+                        .mapToDouble(e -> lastEdgeBusX.get(e.fromId + "->" + e.toId))
+                        .max().orElse(0);
+                double right = Math.max(mb.x + mb.width, mbRoutingMaxX > 0 ? mbRoutingMaxX + MB_PAD : 0);
                 xml.append("        <mxCell id=\"method-box-").append(mbIdx++)
                         .append("\" value=\"").append(xmlEscape(mb.name + "()"))
                         .append("\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=none;")
@@ -955,7 +1022,7 @@ public class FlowChartView {
                         .append("\" vertex=\"1\" parent=\"1\">\n");
                 xml.append("          <mxGeometry x=\"").append(mb.x)
                         .append("\" y=\"").append(mb.y)
-                        .append("\" width=\"").append(mb.width)
+                        .append("\" width=\"").append(right - mb.x)
                         .append("\" height=\"").append(mb.height)
                         .append("\" as=\"geometry\"/>\n");
                 xml.append("        </mxCell>\n");
@@ -966,6 +1033,9 @@ public class FlowChartView {
             double minY = currentNodes.stream().mapToDouble(n -> n.y).min().orElse(0) - pad - 16;
             double maxX = currentNodes.stream().mapToDouble(n -> n.x + n.width).max().orElse(0) + pad;
             double maxY = currentNodes.stream().mapToDouble(n -> n.y + n.height).max().orElse(0) + pad;
+            // Expand to cover routing lines (mirrors drawMethodBox).
+            double routingMaxX = lastEdgeBusX.values().stream().mapToDouble(Double::doubleValue).max().orElse(0);
+            if (routingMaxX > 0) maxX = Math.max(maxX, routingMaxX + pad);
             xml.append("        <mxCell id=\"method-box\" value=\"")
                     .append(xmlEscape(currentMethodName + "()"))
                     .append("\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=none;")
@@ -1039,43 +1109,134 @@ public class FlowChartView {
 
         // ── Edges ─────────────────────────────────────────────────────────
         for (FlowEdge edge : currentEdges) {
-            FlowNode from = currentNodes.stream().filter(n -> n.id.equals(edge.fromId)).findFirst().orElse(null);
-            FlowNode to   = currentNodes.stream().filter(n -> n.id.equals(edge.toId)).findFirst().orElse(null);
+            FlowNode from = findNodeById(currentNodes, edge.fromId);
+            FlowNode to   = findNodeById(currentNodes, edge.toId);
             if (from == null || to == null) continue;
 
-            String label = edge.label != null ? edge.label : "";
+            String label   = edge.label != null ? edge.label : "";
+            String edgeKey = edge.fromId + "->" + edge.toId;
 
+            double fromCX     = from.x + from.width  / 2.0;
+            double toCX       = to.x   + to.width    / 2.0;
+            double fromBottom = from.y + from.height;
+            double toTop      = to.y;
+
+            // ── Back-edge (loop-back): left side of source → left side of target ──────
             if (edge.isBackEdge) {
-                xml.append("        <mxCell id=\"").append(edge.key())
-                        .append("\" value=\"\" style=\"edgeStyle=orthogonalEdgeStyle;")
-                        .append("exitX=0;exitY=0.5;exitDx=0;exitDy=0;")
-                        .append("entryX=0;entryY=0.5;entryDx=0;entryDy=0;")
-                        .append("rounded=0;orthogonalLoop=1;html=1;\"")
-                        .append(" source=\"").append(edge.fromId)
-                        .append("\" target=\"").append(edge.toId)
-                        .append("\" edge=\"1\" parent=\"1\">\n");
-                xml.append("          <mxGeometry relative=\"1\" as=\"geometry\"/>\n");
-                xml.append("        </mxCell>\n");
+                double detourX  = from.type == NodeType.DECISION ? from.x - 30 : from.x - 55;
+                double fromMidY = from.y + from.height / 2.0;
+                double toMidY   = to.y   + to.height   / 2.0;
+                appendEdgeXml(xml, edge.key(), label,
+                        "exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;",
+                        edge.fromId, edge.toId,
+                        new double[][]{{detourX, fromMidY}, {detourX, toMidY}});
                 continue;
             }
 
-            String exitPoint  = (from.type == NodeType.DECISION && "True".equalsIgnoreCase(label))
-                    ? "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
-                    : (from.type == NodeType.LOOP && "False".equalsIgnoreCase(label))
-                    ? "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
-                    : "exitX=0.5;exitY=1;exitDx=0;exitDy=0;";
-            String entryPoint = "entryX=0.5;entryY=0;entryDx=0;entryDy=0;";
+            // ── LOOP false-exit: right side → detour → right side of terminal ─────────
+            if (from.type == NodeType.LOOP && "False".equalsIgnoreCase(label)) {
+                double startY  = from.y + from.height / 2.0;
+                double detourX = from.x + from.width + 70;
+                double endY    = to.y + to.height / 2.0;
+                appendEdgeXml(xml, edge.key(), label,
+                        "exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;",
+                        edge.fromId, edge.toId,
+                        new double[][]{{detourX, startY}, {detourX, endY}});
+                continue;
+            }
 
-            xml.append("        <mxCell id=\"").append(edge.key())
-                    .append("\" value=\"").append(xmlEscape(label))
-                    .append("\" style=\"edgeStyle=orthogonalEdgeStyle;")
-                    .append(exitPoint).append(entryPoint)
-                    .append("rounded=0;orthogonalLoop=1;html=1;\"")
-                    .append(" source=\"").append(edge.fromId)
-                    .append("\" target=\"").append(edge.toId)
-                    .append("\" edge=\"1\" parent=\"1\">\n");
-            xml.append("          <mxGeometry relative=\"1\" as=\"geometry\"/>\n");
-            xml.append("        </mxCell>\n");
+            // ── Join-back: source to the right of target, going downward ──────────────
+            if (fromCX > toCX + 20 && toTop >= fromBottom - 5) {
+                double mergeY  = lastEdgeMergeY.getOrDefault(edgeKey, 0.0);
+                double busX    = lastEdgeBusX.getOrDefault(edgeKey, 0.0);
+                boolean single = lastEdgeSingleJoinBack.getOrDefault(edgeKey, true);
+                double effectiveMergeY = mergeY > fromBottom ? mergeY : (fromBottom + toTop) / 2.0;
+
+                String lbl = from.label.toLowerCase();
+                boolean hasDb = lbl.contains("save") || lbl.contains("update") || lbl.contains("delete");
+
+                if (hasDb || single) {
+                    // Bottom-center exit → horizontal at mergeY → into top of target
+                    appendEdgeXml(xml, edge.key(), label,
+                            "exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                            edge.fromId, edge.toId,
+                            new double[][]{{fromCX, effectiveMergeY}, {toCX, effectiveMergeY}});
+                } else {
+                    // Right-side bus exit → staggered bus → horizontal at mergeY → into top of target
+                    double fromMidY = from.y + from.height / 2.0;
+                    appendEdgeXml(xml, edge.key(), label,
+                            "exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                            edge.fromId, edge.toId,
+                            new double[][]{{busX, fromMidY}, {busX, effectiveMergeY}, {toCX, effectiveMergeY}});
+                }
+                continue;
+            }
+
+            // ── DECISION True/Yes: right side of diamond ──────────────────────────────
+            if (from.type == NodeType.DECISION
+                    && ("True".equalsIgnoreCase(label) || "Yes".equalsIgnoreCase(label))) {
+                double startY = from.y + from.height / 2.0;
+                if (Math.abs(to.y - from.y) < 5) {
+                    // Same row: purely horizontal, enter from left side of target box
+                    appendEdgeXml(xml, edge.key(), label,
+                            "exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;",
+                            edge.fromId, edge.toId, null);
+                } else {
+                    // Box is below: go right then down into top of target
+                    appendEdgeXml(xml, edge.key(), label,
+                            "exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                            edge.fromId, edge.toId,
+                            new double[][]{{toCX, startY}});
+                }
+                continue;
+            }
+
+            // ── DECISION False/No: bottom of diamond ──────────────────────────────────
+            if (from.type == NodeType.DECISION
+                    && ("False".equalsIgnoreCase(label) || "No".equalsIgnoreCase(label))) {
+                double startX  = fromCX;
+                double startY2 = fromBottom;
+                double endX    = toCX;
+                if (Math.abs(startX - endX) < 0.5) {
+                    appendEdgeXml(xml, edge.key(), label,
+                            "exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                            edge.fromId, edge.toId, null);
+                } else {
+                    double midY = (startY2 + toTop) / 2.0;
+                    appendEdgeXml(xml, edge.key(), label,
+                            "exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                            edge.fromId, edge.toId,
+                            new double[][]{{startX, midY}, {endX, midY}});
+                }
+                continue;
+            }
+
+            // ── JOIN target: route to target's center column ──────────────────────────
+            if (to.type == NodeType.JOIN) {
+                double startX = fromCX;
+                double startY = fromBottom;
+                double endX   = toCX;
+                appendEdgeXml(xml, edge.key(), label,
+                        "exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                        edge.fromId, edge.toId,
+                        Math.abs(startX - endX) < 0.5 ? null : new double[][]{{startX, toTop}, {endX, toTop}});
+                continue;
+            }
+
+            // ── Straight vertical ─────────────────────────────────────────────────────
+            if (Math.abs(fromCX - toCX) < 0.5) {
+                appendEdgeXml(xml, edge.key(), label,
+                        "exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                        edge.fromId, edge.toId, null);
+                continue;
+            }
+
+            // ── L-routing (left-to-right or general offset) ───────────────────────────
+            double midY = fromBottom + (toTop - fromBottom) * 0.5;
+            appendEdgeXml(xml, edge.key(), label,
+                    "exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;",
+                    edge.fromId, edge.toId,
+                    new double[][]{{fromCX, midY}, {toCX, midY}});
         }
 
         xml.append("      </root>\n");
@@ -1083,6 +1244,35 @@ public class FlowChartView {
         xml.append("  </diagram>\n");
         xml.append("</mxfile>");
         return xml.toString();
+    }
+
+    /**
+     * Appends a draw.io mxCell edge with optional explicit waypoints.
+     * @param points null for no waypoints; otherwise each row is [x, y].
+     */
+    private static void appendEdgeXml(StringBuilder xml, String id, String label,
+                                       String exitEntry, String fromId, String toId,
+                                       double[][] points) {
+        xml.append("        <mxCell id=\"").append(id)
+                .append("\" value=\"").append(xmlEscape(label))
+                .append("\" style=\"edgeStyle=orthogonalEdgeStyle;").append(exitEntry)
+                .append("rounded=0;orthogonalLoop=1;html=1;\"")
+                .append(" source=\"").append(fromId)
+                .append("\" target=\"").append(toId)
+                .append("\" edge=\"1\" parent=\"1\">\n");
+        if (points != null && points.length > 0) {
+            xml.append("          <mxGeometry relative=\"1\" as=\"geometry\">\n");
+            xml.append("            <Array as=\"points\">\n");
+            for (double[] p : points) {
+                xml.append("              <mxPoint x=\"").append((int) p[0])
+                        .append("\" y=\"").append((int) p[1]).append("\"/>\n");
+            }
+            xml.append("            </Array>\n");
+            xml.append("          </mxGeometry>\n");
+        } else {
+            xml.append("          <mxGeometry relative=\"1\" as=\"geometry\"/>\n");
+        }
+        xml.append("        </mxCell>\n");
     }
 
     private static String xmlEscape(String s) {
