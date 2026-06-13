@@ -31,6 +31,7 @@ public class FlowChartView {
     private List<StreamGroup> currentStreamGroups = new ArrayList<>();
     private List<MethodBox> currentMethodGroups = new ArrayList<>();
     private String currentMethodName;
+    private String currentClassName;
     private final Pane root = new Pane();
     private final Group contentGroup = new Group();
 
@@ -74,31 +75,110 @@ public class FlowChartView {
         currentStreamGroups.clear();
         currentMethodGroups.clear();
         currentMethodName = null;
+        currentClassName  = null;
     }
 
     public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges, String methodName,
-                         List<StreamGroup> streamGroups, List<MethodBox> methodGroups) {
+                         List<StreamGroup> streamGroups, List<MethodBox> methodGroups,
+                         String className) {
         clear();
         this.currentNodes = nodes;
         this.currentEdges = edges;
         this.currentMethodName = methodName;
         this.currentStreamGroups = streamGroups != null ? streamGroups : new ArrayList<>();
         this.currentMethodGroups = methodGroups != null ? methodGroups : new ArrayList<>();
+        this.currentClassName = className;
         logger.info("Starting to draw flow... ");
 
         // ── Routing pre-computation (must precede box drawing so boxes enclose all lines) ──
+        // In "All Methods" mode routing is computed independently per method box so that
+        // join-back lines from one method never stray into a neighbouring method.
 
-        // Bus base column: right-column exits route here to avoid crossing center-column nodes.
-        double busX = nodes.stream()
-                .filter(n -> n.type != NodeType.JOIN)
-                .mapToDouble(n -> n.x + n.width)
-                .max().orElse(600.0) + 20;
-
-        // Stagger ranks: join-back edges (right-column → center-column below) each get a unique
-        // bus x so their vertical segments don't overlap. Top-most source → highest rank.
         final double STAGGER_STEP = 20.0;
-        Map<String, Integer> staggerRanks = new HashMap<>();
-        {
+
+        // These maps are keyed by "fromId->toId" for every join-back edge.
+        Map<String, Integer> staggerRanks        = new HashMap<>();
+        Map<String, Double>  perEdgeMergeY        = new HashMap<>();
+        Map<String, Double>  perEdgeBusX          = new HashMap<>(); // final staggered bus X per edge
+        Map<String, Boolean> perEdgeSingleJoinBack = new HashMap<>();
+        double routingMaxX = 0;
+
+        if (!currentMethodGroups.isEmpty()) {
+            // ── All Methods: compute routing independently per method box ──
+            for (MethodBox mb : currentMethodGroups) {
+                List<FlowNode> mbNodes = nodes.stream()
+                        .filter(n -> {
+                            double cx = n.x + n.width / 2.0, cy = n.y + n.height / 2.0;
+                            return cx >= mb.x && cx <= mb.x + mb.width
+                                    && cy >= mb.y && cy <= mb.y + mb.height;
+                        }).toList();
+                Set<String> mbIds = new HashSet<>();
+                mbNodes.forEach(n -> mbIds.add(n.id));
+                List<FlowEdge> mbEdges = edges.stream()
+                        .filter(e -> mbIds.contains(e.fromId)).toList();
+
+                double mbBusX = mbNodes.stream()
+                        .filter(n -> n.type != NodeType.JOIN)
+                        .mapToDouble(n -> n.x + n.width)
+                        .max().orElse(mb.x + mb.width) + 20;
+
+                List<String> mbJoinBackIds = mbEdges.stream()
+                        .filter(e -> {
+                            FlowNode f = findNodeById(mbNodes, e.fromId);
+                            FlowNode t = findNodeById(mbNodes, e.toId);
+                            if (f == null || t == null) return false;
+                            return (f.x + f.width / 2.0) > (t.x + t.width / 2.0) + 20
+                                    && t.y >= f.y - 5;
+                        })
+                        .map(e -> e.fromId).distinct()
+                        .sorted(Comparator.comparingDouble(id -> {
+                            FlowNode f = findNodeById(mbNodes, id);
+                            return f != null ? f.y : 0;
+                        })).toList();
+
+                Map<String, Integer> mbRanks = new HashMap<>();
+                int mbN = mbJoinBackIds.size();
+                for (int i = 0; i < mbN; i++) mbRanks.put(mbJoinBackIds.get(i), mbN - 1 - i);
+                staggerRanks.putAll(mbRanks);
+
+                Set<String> mbJoinBackSet = new HashSet<>(mbJoinBackIds);
+                boolean mbSingle = mbJoinBackIds.size() <= 1;
+
+                for (FlowEdge e : mbEdges) {
+                    if (!mbJoinBackSet.contains(e.fromId) || e.toId == null) continue;
+                    String key = e.fromId + "->" + e.toId;
+                    double edgeBusX = mbBusX + mbRanks.getOrDefault(e.fromId, 0) * STAGGER_STEP;
+                    perEdgeBusX.put(key, edgeBusX);
+                    perEdgeSingleJoinBack.put(key, mbSingle);
+
+                    FlowNode src = findNodeById(mbNodes, e.fromId);
+                    FlowNode tgt = findNodeById(mbNodes, e.toId);
+                    if (src == null || tgt == null) continue;
+                    double srcBottom = src.y + src.height, tgtTop = tgt.y;
+                    double localMax = mbNodes.stream()
+                            .filter(n -> !n.id.equals(src.id) && !n.id.equals(tgt.id)
+                                    && n.type != NodeType.JOIN
+                                    && (n.x + n.width) < src.x
+                                    && (n.y + n.height) > srcBottom - 5
+                                    && n.y < tgtTop)
+                            .mapToDouble(n -> n.y + n.height).max().orElse(srcBottom);
+                    perEdgeMergeY.put(key,
+                            Math.min(Math.max(localMax + 20, srcBottom + 20), tgtTop - 5));
+                }
+
+                double mbMaxBusX = mbJoinBackIds.isEmpty() ? 0
+                        : mbBusX + mbRanks.values().stream()
+                                .mapToInt(Integer::intValue).max().orElse(0) * STAGGER_STEP;
+                routingMaxX = Math.max(routingMaxX, mbMaxBusX);
+            }
+
+        } else {
+            // ── Single method: compute routing globally ──
+            double busX = nodes.stream()
+                    .filter(n -> n.type != NodeType.JOIN)
+                    .mapToDouble(n -> n.x + n.width)
+                    .max().orElse(600.0) + 20;
+
             List<String> joinBackIds = edges.stream()
                     .filter(e -> {
                         FlowNode f = findNodeById(nodes, e.fromId);
@@ -107,60 +187,88 @@ public class FlowChartView {
                         return (f.x + f.width / 2.0) > (t.x + t.width / 2.0) + 20
                                 && t.y >= f.y - 5;
                     })
-                    .map(e -> e.fromId)
+                    .map(e -> e.fromId).distinct()
                     .sorted(Comparator.comparingDouble(id -> {
                         FlowNode f = findNodeById(nodes, id);
                         return f != null ? f.y : 0;
                     })).toList();
+
             int n = joinBackIds.size();
-            for (int i = 0; i < n; i++) {
-                staggerRanks.put(joinBackIds.get(i), n - 1 - i);
+            for (int i = 0; i < n; i++) staggerRanks.put(joinBackIds.get(i), n - 1 - i);
+
+            routingMaxX = staggerRanks.isEmpty() ? 0
+                    : busX + staggerRanks.values().stream()
+                            .mapToInt(Integer::intValue).max().orElse(0) * STAGGER_STEP;
+
+            Set<String> joinBackSourceIds = staggerRanks.keySet();
+            boolean globalSingle = staggerRanks.size() <= 1;
+            for (FlowEdge e : edges) {
+                if (!joinBackSourceIds.contains(e.fromId) || e.toId == null) continue;
+                String key = e.fromId + "->" + e.toId;
+                double edgeBusX = busX + staggerRanks.getOrDefault(e.fromId, 0) * STAGGER_STEP;
+                perEdgeBusX.put(key, edgeBusX);
+                perEdgeSingleJoinBack.put(key, globalSingle);
+
+                FlowNode src = findNodeById(nodes, e.fromId);
+                FlowNode tgt = findNodeById(nodes, e.toId);
+                if (src == null || tgt == null) continue;
+                double srcBottom = src.y + src.height, tgtTop = tgt.y;
+                double localMax = nodes.stream()
+                        .filter(nn -> !nn.id.equals(src.id) && !nn.id.equals(tgt.id)
+                                && nn.type != NodeType.JOIN
+                                && (nn.x + nn.width) < src.x
+                                && (nn.y + nn.height) > srcBottom - 5
+                                && nn.y < tgtTop)
+                        .mapToDouble(nn -> nn.y + nn.height).max().orElse(srcBottom);
+                perEdgeMergeY.put(key,
+                        Math.min(Math.max(localMax + 20, srcBottom + 20), tgtTop - 5));
             }
-        }
-
-        // Rightmost x reached by any staggered line (used to expand method boxes).
-        double routingMaxX = staggerRanks.isEmpty() ? 0
-                : busX + staggerRanks.values().stream()
-                        .mapToInt(Integer::intValue).max().orElse(0) * STAGGER_STEP;
-
-        // Per-edge merge Y: for each join-back edge find the bottommost center-column
-        // node sitting between the source bottom and the target top, then route the
-        // horizontal segment 20 px below it so it never clips any node in its path.
-        final Set<String> joinBackSourceIds = staggerRanks.keySet();
-        Map<String, Double> perEdgeMergeY = new HashMap<>();
-        for (FlowEdge e : edges) {
-            if (!joinBackSourceIds.contains(e.fromId) || e.toId == null) continue;
-            FlowNode src = findNodeById(nodes, e.fromId);
-            FlowNode tgt = findNodeById(nodes, e.toId);
-            if (src == null || tgt == null) continue;
-            double srcBottom = src.y + src.height;
-            double tgtTop    = tgt.y;
-            double localMax  = nodes.stream()
-                    .filter(n -> !n.id.equals(src.id) && !n.id.equals(tgt.id)
-                            && n.type != NodeType.JOIN
-                            && (n.x + n.width) < src.x   // node is fully left of source
-                            && (n.y + n.height) > srcBottom - 5
-                            && n.y < tgtTop)
-                    .mapToDouble(n -> n.y + n.height)
-                    .max().orElse(srcBottom);
-            double safeY = Math.min(Math.max(localMax + 20, srcBottom + 20), tgtTop - 5);
-            perEdgeMergeY.put(e.fromId + "->" + e.toId, safeY);
         }
 
         // ── Draw method / group bounding boxes (now that routingMaxX is known) ──
 
-        if (!currentMethodGroups.isEmpty()) {
+        // Class-level enclosing box — drawn first so it sits behind all method boxes
+        if (!currentMethodGroups.isEmpty() && currentClassName != null) {
+            double clsMinX = Double.MAX_VALUE, clsMinY = Double.MAX_VALUE;
+            double clsMaxX = 0, clsMaxY = 0;
             for (MethodBox mb : currentMethodGroups) {
-                // Expand each method box to enclose the staggered lines belonging to it.
-                double methodRoutingMaxX = staggerRanks.entrySet().stream()
+                double mbRoutingMaxX = edges.stream()
+                        .filter(e -> perEdgeBusX.containsKey(e.fromId + "->" + e.toId))
                         .filter(e -> {
-                            FlowNode n = findNodeById(nodes, e.getKey());
-                            if (n == null) return false;
-                            double cx = n.x + n.width / 2.0, cy = n.y + n.height / 2.0;
+                            FlowNode f = findNodeById(nodes, e.fromId);
+                            if (f == null) return false;
+                            double cx = f.x + f.width / 2.0, cy = f.y + f.height / 2.0;
                             return cx >= mb.x && cx <= mb.x + mb.width
                                     && cy >= mb.y && cy <= mb.y + mb.height;
                         })
-                        .mapToDouble(e -> busX + e.getValue() * STAGGER_STEP)
+                        .mapToDouble(e -> perEdgeBusX.get(e.fromId + "->" + e.toId))
+                        .max().orElse(0);
+                double right = Math.max(mb.x + mb.width, mbRoutingMaxX > 0 ? mbRoutingMaxX + 20 : 0);
+                clsMinX = Math.min(clsMinX, mb.x);
+                clsMinY = Math.min(clsMinY, mb.y);
+                clsMaxX = Math.max(clsMaxX, right);
+                clsMaxY = Math.max(clsMaxY, mb.y + mb.height);
+            }
+            final double CLS_PAD = 30;
+            drawClassBox(clsMinX - CLS_PAD, clsMinY - CLS_PAD - 24,
+                    clsMaxX - clsMinX + 2 * CLS_PAD,
+                    clsMaxY - clsMinY + 2 * CLS_PAD + 24,
+                    currentClassName);
+        }
+
+        if (!currentMethodGroups.isEmpty()) {
+            for (MethodBox mb : currentMethodGroups) {
+                // Max staggered bus X for join-back edges whose source is inside this box.
+                double methodRoutingMaxX = edges.stream()
+                        .filter(e -> perEdgeBusX.containsKey(e.fromId + "->" + e.toId))
+                        .filter(e -> {
+                            FlowNode f = findNodeById(nodes, e.fromId);
+                            if (f == null) return false;
+                            double cx = f.x + f.width / 2.0, cy = f.y + f.height / 2.0;
+                            return cx >= mb.x && cx <= mb.x + mb.width
+                                    && cy >= mb.y && cy <= mb.y + mb.height;
+                        })
+                        .mapToDouble(e -> perEdgeBusX.get(e.fromId + "->" + e.toId))
                         .max().orElse(0);
                 drawMethodGroupBox(mb, methodRoutingMaxX);
             }
@@ -179,11 +287,12 @@ public class FlowChartView {
             FlowNode to = findNodeById(nodes, edge.toId);
             if (from == null || to == null) continue;
 
-            int staggerRank = staggerRanks.getOrDefault(from.id, 0);
-            boolean singleJoinBack = staggerRanks.size() <= 1;
-            double edgeMergeY = perEdgeMergeY.getOrDefault(edge.fromId + "->" + edge.toId, 0.0);
+            String edgeKey = edge.fromId + "->" + edge.toId;
+            double edgeBusX        = perEdgeBusX.getOrDefault(edgeKey, 0.0);
+            double edgeMergeY      = perEdgeMergeY.getOrDefault(edgeKey, 0.0);
+            boolean singleJoinBack = perEdgeSingleJoinBack.getOrDefault(edgeKey, true);
             List<Line> segments = drawEdge(from, to, edge.label, edge.isBackEdge,
-                    busX + staggerRank * STAGGER_STEP, edgeMergeY, singleJoinBack);
+                    edgeBusX, edgeMergeY, singleJoinBack);
             edgeLines.put(edge.fromId + "->" + edge.toId, segments);
             contentGroup.getChildren().addAll(segments);
 
@@ -504,6 +613,23 @@ public class FlowChartView {
 
         Text label = new Text(mb.x + 8, mb.y + 14, mb.name + "()");
         label.setFill(Color.DARKGRAY);
+
+        contentGroup.getChildren().addAll(box, label);
+    }
+
+    private void drawClassBox(double x, double y, double width, double height, String className) {
+        Rectangle box = new Rectangle(x, y, width, height);
+        box.setFill(Color.TRANSPARENT);
+        box.setStroke(Color.web("#1a1a2e"));
+        box.setStrokeWidth(2.5);
+
+        Text label = new Text(className);
+        label.setStyle("-fx-font-size: 15; -fx-font-weight: bold;");
+        label.setFill(Color.web("#1a1a2e"));
+        // Center the label on the top edge; measure before adding to scene
+        double textW = label.getLayoutBounds().getWidth();
+        label.setX(x + (width - textW) / 2);
+        label.setY(y + 18);
 
         contentGroup.getChildren().addAll(box, label);
     }

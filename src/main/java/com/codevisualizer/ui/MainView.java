@@ -263,7 +263,7 @@ public class MainView {
             variablePanel.updateVariables(java.util.Collections.emptyMap());
             variablePanel.updateMockReturnValues(java.util.Collections.emptyMap());
             flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges,
-                    null, lastResult.streamGroups, lastResult.methodGroups);
+                    null, lastResult.streamGroups, lastResult.methodGroups, lastResult.className);
             stepBtn.setDisable(true);
             statusLabel.setText("All methods shown. Select a method to step through.");
 
@@ -287,7 +287,7 @@ public class MainView {
             variablePanel.updateVariables(engine.getVariables());
             variablePanel.updateMockReturnValues(lastResult.mockReturnValues);
             flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges,
-                    lastResult.methodName, lastResult.streamGroups, lastResult.methodGroups);
+                    lastResult.methodName, lastResult.streamGroups, lastResult.methodGroups, null);
             stepBtn.setDisable(false);
             statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
 

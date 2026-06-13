@@ -45,6 +45,7 @@ public class CodeParser {
         public List<StreamGroup> streamGroups = new ArrayList<>();
         public List<MethodBox> methodGroups = new ArrayList<>();
         public String methodName = null;
+        public String className  = null;
     }
 
     private static class BranchResult {
@@ -223,6 +224,15 @@ public class CodeParser {
         List<String> sigs = parseMethodSignatures(code);
         if (sigs.isEmpty()) return parse(code);
 
+        // Extract the class name for the enclosing box label
+        try {
+            com.github.javaparser.ast.CompilationUnit cu =
+                    com.github.javaparser.StaticJavaParser.parse(wrapIfNeeded(code));
+            cu.findFirst(com.github.javaparser.ast.body.ClassOrInterfaceDeclaration.class)
+                    .filter(c -> !"Temp".equals(c.getNameAsString()))
+                    .ifPresent(c -> combined.className = c.getNameAsString());
+        } catch (Exception ignored) {}
+
         final int    METHODS_PER_COLUMN = 3;
         final double METHOD_GAP         = 80;  // vertical gap between methods in same column
         final double COLUMN_GAP         = 60;  // horizontal gap between columns (~half inch)
@@ -273,9 +283,28 @@ public class CodeParser {
                 combined.methodGroups.add(
                         new MethodBox(name, boxMinX, boxMinY, boxMaxX - boxMinX, boxMaxY - boxMinY));
 
+                // Count distinct join-back sources to account for bus-routing line extension.
+                // The renderer expands each method box to: global_maxX + 20*(n+1) where n = nJoinBacks.
+                // (n=0 → boxMaxX = global_maxX+24 wins; n≥1 → routing extension dominates.)
+                final List<FlowNode> mbNodesFinal = mr.flowNodes; // already shifted to global coords
+                long nJoinBacks = mr.flowEdges.stream()
+                        .filter(e -> {
+                            FlowNode f = mbNodesFinal.stream()
+                                    .filter(nn -> nn.id.equals(e.fromId)).findFirst().orElse(null);
+                            FlowNode t = mbNodesFinal.stream()
+                                    .filter(nn -> nn.id.equals(e.toId)).findFirst().orElse(null);
+                            if (f == null || t == null) return false;
+                            return (f.x + f.width / 2.0) > (t.x + t.width / 2.0) + 20
+                                    && t.y >= f.y - 5;
+                        })
+                        .map(e -> e.fromId).distinct().count();
+                double effectiveMaxRight = nJoinBacks > 0
+                        ? (maxX + xShift) + 20.0 * (nJoinBacks + 1)
+                        : boxMaxX;
+
                 // Track this column's horizontal extent to position the next column
                 columnMinLeft  = Math.min(columnMinLeft,  boxMinX);
-                columnMaxRight = Math.max(columnMaxRight, boxMaxX);
+                columnMaxRight = Math.max(columnMaxRight, effectiveMaxRight);
 
                 combined.flowNodes.addAll(mr.flowNodes);
                 combined.flowEdges.addAll(mr.flowEdges);
