@@ -3,6 +3,7 @@ package com.codevisualizer.ui;
 import com.codevisualizer.enums.NodeType;
 import com.codevisualizer.model.FlowEdge;
 import com.codevisualizer.model.FlowNode;
+import com.codevisualizer.model.MethodBox;
 import com.codevisualizer.model.StreamGroup;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
@@ -28,6 +29,7 @@ public class FlowChartView {
     private List<FlowNode> currentNodes;
     private List<FlowEdge> currentEdges;
     private List<StreamGroup> currentStreamGroups = new ArrayList<>();
+    private List<MethodBox> currentMethodGroups = new ArrayList<>();
     private String currentMethodName;
     private final Pane root = new Pane();
     private final Group contentGroup = new Group();
@@ -70,20 +72,100 @@ public class FlowChartView {
         edgeLines.clear();
         dbSymbolShapes.clear();
         currentStreamGroups.clear();
+        currentMethodGroups.clear();
         currentMethodName = null;
     }
 
     public void drawFlow(List<FlowNode> nodes, List<FlowEdge> edges, String methodName,
-                         List<StreamGroup> streamGroups) {
+                         List<StreamGroup> streamGroups, List<MethodBox> methodGroups) {
         clear();
         this.currentNodes = nodes;
         this.currentEdges = edges;
         this.currentMethodName = methodName;
         this.currentStreamGroups = streamGroups != null ? streamGroups : new ArrayList<>();
+        this.currentMethodGroups = methodGroups != null ? methodGroups : new ArrayList<>();
         logger.info("Starting to draw flow... ");
 
-        if (methodName != null && !nodes.isEmpty()) {
-            drawMethodBox(nodes, methodName, currentStreamGroups);
+        // ── Routing pre-computation (must precede box drawing so boxes enclose all lines) ──
+
+        // Bus base column: right-column exits route here to avoid crossing center-column nodes.
+        double busX = nodes.stream()
+                .filter(n -> n.type != NodeType.JOIN)
+                .mapToDouble(n -> n.x + n.width)
+                .max().orElse(600.0) + 20;
+
+        // Stagger ranks: join-back edges (right-column → center-column below) each get a unique
+        // bus x so their vertical segments don't overlap. Top-most source → highest rank.
+        final double STAGGER_STEP = 20.0;
+        Map<String, Integer> staggerRanks = new HashMap<>();
+        {
+            List<String> joinBackIds = edges.stream()
+                    .filter(e -> {
+                        FlowNode f = findNodeById(nodes, e.fromId);
+                        FlowNode t = findNodeById(nodes, e.toId);
+                        if (f == null || t == null) return false;
+                        return (f.x + f.width / 2.0) > (t.x + t.width / 2.0) + 20
+                                && t.y >= f.y - 5;
+                    })
+                    .map(e -> e.fromId)
+                    .sorted(Comparator.comparingDouble(id -> {
+                        FlowNode f = findNodeById(nodes, id);
+                        return f != null ? f.y : 0;
+                    })).toList();
+            int n = joinBackIds.size();
+            for (int i = 0; i < n; i++) {
+                staggerRanks.put(joinBackIds.get(i), n - 1 - i);
+            }
+        }
+
+        // Rightmost x reached by any staggered line (used to expand method boxes).
+        double routingMaxX = staggerRanks.isEmpty() ? 0
+                : busX + staggerRanks.values().stream()
+                        .mapToInt(Integer::intValue).max().orElse(0) * STAGGER_STEP;
+
+        // Per-edge merge Y: for each join-back edge find the bottommost center-column
+        // node sitting between the source bottom and the target top, then route the
+        // horizontal segment 20 px below it so it never clips any node in its path.
+        final Set<String> joinBackSourceIds = staggerRanks.keySet();
+        Map<String, Double> perEdgeMergeY = new HashMap<>();
+        for (FlowEdge e : edges) {
+            if (!joinBackSourceIds.contains(e.fromId) || e.toId == null) continue;
+            FlowNode src = findNodeById(nodes, e.fromId);
+            FlowNode tgt = findNodeById(nodes, e.toId);
+            if (src == null || tgt == null) continue;
+            double srcBottom = src.y + src.height;
+            double tgtTop    = tgt.y;
+            double localMax  = nodes.stream()
+                    .filter(n -> !n.id.equals(src.id) && !n.id.equals(tgt.id)
+                            && n.type != NodeType.JOIN
+                            && (n.x + n.width) < src.x   // node is fully left of source
+                            && (n.y + n.height) > srcBottom - 5
+                            && n.y < tgtTop)
+                    .mapToDouble(n -> n.y + n.height)
+                    .max().orElse(srcBottom);
+            double safeY = Math.min(Math.max(localMax + 20, srcBottom + 20), tgtTop - 5);
+            perEdgeMergeY.put(e.fromId + "->" + e.toId, safeY);
+        }
+
+        // ── Draw method / group bounding boxes (now that routingMaxX is known) ──
+
+        if (!currentMethodGroups.isEmpty()) {
+            for (MethodBox mb : currentMethodGroups) {
+                // Expand each method box to enclose the staggered lines belonging to it.
+                double methodRoutingMaxX = staggerRanks.entrySet().stream()
+                        .filter(e -> {
+                            FlowNode n = findNodeById(nodes, e.getKey());
+                            if (n == null) return false;
+                            double cx = n.x + n.width / 2.0, cy = n.y + n.height / 2.0;
+                            return cx >= mb.x && cx <= mb.x + mb.width
+                                    && cy >= mb.y && cy <= mb.y + mb.height;
+                        })
+                        .mapToDouble(e -> busX + e.getValue() * STAGGER_STEP)
+                        .max().orElse(0);
+                drawMethodGroupBox(mb, methodRoutingMaxX);
+            }
+        } else if (methodName != null && !nodes.isEmpty()) {
+            drawMethodBox(nodes, methodName, currentStreamGroups, routingMaxX);
         }
 
         for (StreamGroup sg : currentStreamGroups) {
@@ -97,7 +179,11 @@ public class FlowChartView {
             FlowNode to = findNodeById(nodes, edge.toId);
             if (from == null || to == null) continue;
 
-            List<Line> segments = drawEdge(from, to, edge.label, edge.isBackEdge);
+            int staggerRank = staggerRanks.getOrDefault(from.id, 0);
+            boolean singleJoinBack = staggerRanks.size() <= 1;
+            double edgeMergeY = perEdgeMergeY.getOrDefault(edge.fromId + "->" + edge.toId, 0.0);
+            List<Line> segments = drawEdge(from, to, edge.label, edge.isBackEdge,
+                    busX + staggerRank * STAGGER_STEP, edgeMergeY, singleJoinBack);
             edgeLines.put(edge.fromId + "->" + edge.toId, segments);
             contentGroup.getChildren().addAll(segments);
 
@@ -407,6 +493,21 @@ public class FlowChartView {
         }
     }
 
+    private void drawMethodGroupBox(MethodBox mb, double routingMaxX) {
+        final double PAD = 20;
+        double right = Math.max(mb.x + mb.width, routingMaxX + PAD);
+        Rectangle box = new Rectangle(mb.x, mb.y, right - mb.x, mb.height);
+        box.setFill(Color.TRANSPARENT);
+        box.setStroke(Color.DARKGRAY);
+        box.setStrokeWidth(1.5);
+        box.getStrokeDashArray().addAll(8.0, 5.0);
+
+        Text label = new Text(mb.x + 8, mb.y + 14, mb.name + "()");
+        label.setFill(Color.DARKGRAY);
+
+        contentGroup.getChildren().addAll(box, label);
+    }
+
     private void drawStreamGroupBox(StreamGroup sg) {
         Rectangle box = new Rectangle(sg.x, sg.y, sg.width, sg.height);
         box.setFill(Color.web("#EEF4FF"));
@@ -421,12 +522,16 @@ public class FlowChartView {
         contentGroup.getChildren().addAll(box, label);
     }
 
-    private void drawMethodBox(List<FlowNode> nodes, String methodName, List<StreamGroup> streamGroups) {
+    private void drawMethodBox(List<FlowNode> nodes, String methodName, List<StreamGroup> streamGroups,
+                               double routingMaxX) {
         double pad = 24;
         double minX = nodes.stream().mapToDouble(n -> n.x).min().orElse(0) - pad;
         double minY = nodes.stream().mapToDouble(n -> n.y).min().orElse(0) - pad - 16; // extra room for label
         double maxX = nodes.stream().mapToDouble(n -> n.x + n.width).max().orElse(0) + pad;
         double maxY = nodes.stream().mapToDouble(n -> n.y + n.height).max().orElse(0) + pad;
+
+        // Expand to contain staggered routing lines that extend beyond the rightmost node.
+        maxX = Math.max(maxX, routingMaxX + pad);
 
         // Expand to contain any stream group boxes (which extend beyond node bounds)
         for (StreamGroup sg : streamGroups) {
@@ -448,7 +553,8 @@ public class FlowChartView {
         contentGroup.getChildren().addAll(box, label);
     }
 
-    private List<Line> drawEdge(FlowNode from, FlowNode to, String label, boolean isBackEdge) {
+    private List<Line> drawEdge(FlowNode from, FlowNode to, String label, boolean isBackEdge,
+                                double busX, double mergeY, boolean singleJoinBack) {
         logger.info("Drawing connecting LINE from [{}] to [{}], fromType:{} - toType:{} | with Line Label: {}",
                 from.label, to.label, from.type, to.type, label);
         List<Line> lines = new ArrayList<>();
@@ -488,11 +594,17 @@ public class FlowChartView {
                 double fromCX = from.x + from.width / 2.0;
                 double toCX   = to.x   + to.width   / 2.0;
                 if (toCX > fromCX + 10) {
-                    // Target is to the right (if/else branch): go RIGHT then DOWN
-                    logger.info("Draw DECISION Line RIGHT");
                     double startX = from.x + from.width;
-                    lines.add(createLine(startX, startY, toCX, startY));
-                    lines.add(createLine(toCX, startY, toCX, to.y));
+                    if (Math.abs(to.y - from.y) < 5) {
+                        // Same Y level: pure horizontal from diamond right edge to box left edge
+                        logger.info("Draw DECISION Line RIGHT (same-level)");
+                        lines.add(createLine(startX, startY, to.x, startY));
+                    } else {
+                        // Box below decision: go RIGHT then DOWN into box top
+                        logger.info("Draw DECISION Line RIGHT then DOWN");
+                        lines.add(createLine(startX, startY, toCX, startY));
+                        lines.add(createLine(toCX, startY, toCX, to.y));
+                    }
                 } else {
                     // Target is directly below (stream filter pass): go straight DOWN
                     logger.info("Draw DECISION True Line DOWN");
@@ -541,25 +653,53 @@ public class FlowChartView {
             return lines;
         }
 
-        double fromX = from.x + (from.width / 2); // Set X to Middle of Shape
-        double fromY = from.y + from.height; // Set Y to Bottom of Shape
-        double toX = to.x + (to.width / 2); // Set x to Middle of Shape
-        double toY = to.y; // Set Y to Top of Shape
+        double fromX = from.x + (from.width / 2);
+        double fromY = from.y + from.height;
+        double toX = to.x + (to.width / 2);
+        double toY = to.y;
 
-        // If FROM Shape and TO Shape are already aligned vertically - Create ONE line ONLY
+        // Vertically aligned — single straight line
         if (Math.abs(fromX - toX) < 0.5) {
             logger.info("Draw SINGLE PROCESS Line - FROM x:{} y:{} - TO x:{} y:{}", fromX, fromY, toX, toY);
             lines.add(createLine(fromX, fromY, toX, toY));
             return lines;
         }
 
-        // FROM Shape is NOT vertically aligned - create multiple connected lines with right angles
-        double midY = fromY + ((toY - fromY) * 0.5); // Set Mid-way between two shapes
+        // Right-to-left downward: source is in a right-side branch column, target is in the main
+        // column below. Two sub-cases:
+        //   • Node has a database symbol on its RIGHT side → exit from BOTTOM center to avoid
+        //     the routing line visually merging with the db connector.
+        //   • Otherwise → staggered right-side bus routing.
+        if (fromX > toX + 20 && toY >= fromY - 5) {
+            double effectiveMergeY = mergeY > fromY ? mergeY : (fromY + toY) / 2.0;
+            String lbl = from.label.toLowerCase();
+            boolean hasDbSymbol = lbl.contains("save") || lbl.contains("update") || lbl.contains("delete");
+
+            if (hasDbSymbol || singleJoinBack) {
+                logger.info("Draw BOTTOM-ROUTE Line - FROM x:{} y:{} merge y:{} TO x:{} y:{}",
+                        fromX, fromY, effectiveMergeY, toX, toY);
+                lines.add(createLine(fromX, fromY, fromX, effectiveMergeY));         // ↓ from bottom center
+                lines.add(createLine(fromX, effectiveMergeY, toX, effectiveMergeY)); // ← to target center
+                lines.add(createLine(toX, effectiveMergeY, toX, toY));               // ↓ into target
+            } else {
+                logger.info("Draw BUS-ROUTE Line - FROM x:{} y:{} via bus x:{} merge y:{} TO x:{} y:{}",
+                        fromX, fromY, busX, mergeY, toX, toY);
+                double fromMidY = from.y + from.height / 2.0;
+                lines.add(createLine(from.x + from.width, fromMidY, busX, fromMidY)); // → bus
+                lines.add(createLine(busX, fromMidY, busX, effectiveMergeY));          // ↓ to mergeY
+                lines.add(createLine(busX, effectiveMergeY, toX, effectiveMergeY));    // ← converge left
+                lines.add(createLine(toX, effectiveMergeY, toX, toY));                 // ↓ into target
+            }
+            return lines;
+        }
+
+        // Left-to-right or other: standard L-routing
+        double midY = fromY + ((toY - fromY) * 0.5);
         logger.info("Draw MULTIPLE PROCESS Line - FROM x:{} y:{} - TO x:{} y:{} - MID y:{}",
                 fromX, fromY, toX, toY, midY);
-        lines.add(createLine(fromX, fromY, fromX, midY)); // Vertical Line - 1st
-        lines.add(createLine(fromX, midY, toX, midY)); // Horizontal Line - 2nd
-        lines.add(createLine(toX, midY, toX, toY)); // Vertical Line - 3rd
+        lines.add(createLine(fromX, fromY, fromX, midY));
+        lines.add(createLine(fromX, midY, toX, midY));
+        lines.add(createLine(toX, midY, toX, toY));
         return lines;
     }
 
@@ -677,8 +817,24 @@ public class FlowChartView {
         xml.append("        <mxCell id=\"0\"/>\n");
         xml.append("        <mxCell id=\"1\" parent=\"0\"/>\n");
 
-        // ── Method box (dashed) — added first so it renders behind nodes ──
-        if (currentMethodName != null && !currentNodes.isEmpty()) {
+        // ── Method box(es) — rendered behind nodes ───────────────────────
+        if (!currentMethodGroups.isEmpty()) {
+            int mbIdx = 0;
+            for (MethodBox mb : currentMethodGroups) {
+                xml.append("        <mxCell id=\"method-box-").append(mbIdx++)
+                        .append("\" value=\"").append(xmlEscape(mb.name + "()"))
+                        .append("\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=none;")
+                        .append("strokeColor=#888888;dashed=1;dashPattern=8 5;")
+                        .append("verticalAlign=top;align=left;fontSize=12;fontColor=#888888;spacingLeft=6;")
+                        .append("\" vertex=\"1\" parent=\"1\">\n");
+                xml.append("          <mxGeometry x=\"").append(mb.x)
+                        .append("\" y=\"").append(mb.y)
+                        .append("\" width=\"").append(mb.width)
+                        .append("\" height=\"").append(mb.height)
+                        .append("\" as=\"geometry\"/>\n");
+                xml.append("        </mxCell>\n");
+            }
+        } else if (currentMethodName != null && !currentNodes.isEmpty()) {
             double pad = 24;
             double minX = currentNodes.stream().mapToDouble(n -> n.x).min().orElse(0) - pad;
             double minY = currentNodes.stream().mapToDouble(n -> n.y).min().orElse(0) - pad - 16;

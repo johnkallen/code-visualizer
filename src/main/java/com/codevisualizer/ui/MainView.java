@@ -17,6 +17,7 @@ import org.fxmisc.richtext.CodeArea;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -56,7 +57,7 @@ public class MainView {
 
         // Create SplitPane with titled containers
         SplitPane split = new SplitPane();
-        split.setDividerPositions(0.3);
+        split.setDividerPositions(0.4);
 
         // Wrap Code Editor in a VBox with a title
         VBox codeContainer = new VBox(5);
@@ -212,25 +213,30 @@ public class MainView {
             List<String> signatures = parser.parseMethodSignatures(formatted);
 
             if (signatures.size() > 1) {
-                // Multi-method class: show selector and let it trigger visualizeMethod
+                // Multi-method class: populate selector with "All Methods" first
+                List<String> items = new ArrayList<>();
+                items.add("All Methods");
+                items.addAll(signatures);
+
                 methodSelector.setOnAction(null); // suppress during repopulation
-                methodSelector.getItems().setAll(signatures);
+                methodSelector.getItems().setAll(items);
                 methodLabel.setVisible(true);
                 methodLabel.setManaged(true);
                 methodSelector.setVisible(true);
                 methodSelector.setManaged(true);
-                methodSelector.setValue(signatures.get(0));
+                methodSelector.setValue("All Methods");
                 methodSelector.setOnAction(e -> {
-                    String sig = methodSelector.getValue();
-                    if (sig != null && lastCode != null) {
-                        String name = sig.contains("(") ? sig.substring(0, sig.indexOf('(')) : sig;
+                    String selected = methodSelector.getValue();
+                    if (selected == null || lastCode == null) return;
+                    if ("All Methods".equals(selected)) {
+                        visualizeAllMethods();
+                    } else {
+                        String name = selected.contains("(")
+                                ? selected.substring(0, selected.indexOf('(')) : selected;
                         visualizeMethod(name);
                     }
                 });
-                // Visualize the first method immediately
-                String firstName = signatures.get(0);
-                firstName = firstName.contains("(") ? firstName.substring(0, firstName.indexOf('(')) : firstName;
-                visualizeMethod(firstName);
+                visualizeAllMethods();
             } else {
                 // Single method or bare code: hide selector and visualize directly
                 hideMethodSelector();
@@ -247,6 +253,30 @@ public class MainView {
         }
     }
 
+    /** Renders all methods stacked vertically; variables empty, Step disabled. */
+    private void visualizeAllMethods() {
+        try {
+            CodeParser parser = new CodeParser();
+            lastResult = parser.parseAll(lastCode);
+
+            engine = null;
+            variablePanel.updateVariables(java.util.Collections.emptyMap());
+            variablePanel.updateMockReturnValues(java.util.Collections.emptyMap());
+            flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges,
+                    null, lastResult.streamGroups, lastResult.methodGroups);
+            stepBtn.setDisable(true);
+            statusLabel.setText("All methods shown. Select a method to step through.");
+
+        } catch (Exception ex) {
+            engine = null;
+            lastResult = null;
+            variablePanel.clear();
+            flowChartView.clear();
+            statusLabel.setText("Visualize failed: " + ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+
     /** Parses and renders the named method (null = first/only method). */
     private void visualizeMethod(String targetMethodName) {
         try {
@@ -257,7 +287,7 @@ public class MainView {
             variablePanel.updateVariables(engine.getVariables());
             variablePanel.updateMockReturnValues(lastResult.mockReturnValues);
             flowChartView.drawFlow(lastResult.flowNodes, lastResult.flowEdges,
-                    lastResult.methodName, lastResult.streamGroups);
+                    lastResult.methodName, lastResult.streamGroups, lastResult.methodGroups);
             stepBtn.setDisable(false);
             statusLabel.setText("Visualize complete. Nodes: " + lastResult.flowNodes.size());
 
@@ -360,8 +390,10 @@ public class MainView {
     }
 
     private static String wrapForParsing(String code) {
-        if (code.contains("class")) return code;
-        String first = code.trim().split("\\s+")[0];
+        String noComments = code.replaceAll("/\\*(?s).*?\\*/", " ").replaceAll("//[^\n\r]*", " ");
+        if (noComments.contains("class")) return code;
+        String[] tokens = noComments.trim().split("\\s+");
+        String first = tokens.length > 0 ? tokens[0] : "";
         boolean isMethodDecl = first.equals("public") || first.equals("private")
                 || first.equals("protected") || first.equals("static") || first.equals("void");
         return isMethodDecl ? "class Temp { " + code + " }"

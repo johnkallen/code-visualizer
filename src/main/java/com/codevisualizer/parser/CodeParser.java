@@ -2,6 +2,7 @@ package com.codevisualizer.parser;
 
 import com.codevisualizer.model.FlowEdge;
 import com.codevisualizer.model.FlowNode;
+import com.codevisualizer.model.MethodBox;
 import com.codevisualizer.model.StreamGroup;
 import com.codevisualizer.enums.NodeType;
 import com.codevisualizer.model.Pair;
@@ -42,6 +43,7 @@ public class CodeParser {
         public List<FlowNode> flowNodes = new ArrayList<>();
         public List<FlowEdge> flowEdges = new ArrayList<>();
         public List<StreamGroup> streamGroups = new ArrayList<>();
+        public List<MethodBox> methodGroups = new ArrayList<>();
         public String methodName = null;
     }
 
@@ -57,8 +59,11 @@ public class CodeParser {
 
     /** Wraps bare code or a bare method in a throwaway class so JavaParser can parse it. */
     private String wrapIfNeeded(String code) {
-        if (code.contains("class")) return code;
-        String first = code.trim().split("\\s+")[0];
+        // Strip comments to find the true first keyword (leading // or /* */ must not fool us)
+        String noComments = code.replaceAll("/\\*(?s).*?\\*/", " ").replaceAll("//[^\n\r]*", " ");
+        if (noComments.contains("class")) return code;
+        String[] tokens = noComments.trim().split("\\s+");
+        String first = tokens.length > 0 ? tokens[0] : "";
         boolean isMethodDecl = first.equals("public") || first.equals("private")
                 || first.equals("protected") || first.equals("static") || first.equals("void");
         return isMethodDecl ? "class Temp { " + code + " }"
@@ -85,6 +90,11 @@ public class CodeParser {
         return signatures;
     }
 
+
+    /** Convenience overload — parses the first (or only) method. */
+    public ParseResult parse(String code) {
+        return parse(code, null);
+    }
 
     /**
      * Parses {@code targetMethodName} from the code and builds the flowchart model.
@@ -204,6 +214,85 @@ public class CodeParser {
     }
 
     /**
+     * Parses every method in the class and lays them out in a grid: at most 3 methods
+     * per column, then a new column starts ~half-inch to the right of the widest method
+     * box in the previous column. Used for the "All Methods" view.
+     */
+    public ParseResult parseAll(String code) {
+        ParseResult combined = new ParseResult();
+        List<String> sigs = parseMethodSignatures(code);
+        if (sigs.isEmpty()) return parse(code);
+
+        final int    METHODS_PER_COLUMN = 3;
+        final double METHOD_GAP         = 80;  // vertical gap between methods in same column
+        final double COLUMN_GAP         = 60;  // horizontal gap between columns (~half inch)
+        final double PAD                = 24;
+
+        double xOffset   = 0;
+        int    numColumns = (sigs.size() + METHODS_PER_COLUMN - 1) / METHODS_PER_COLUMN;
+
+        for (int col = 0; col < numColumns; col++) {
+            int start = col * METHODS_PER_COLUMN;
+            int end   = Math.min(start + METHODS_PER_COLUMN, sigs.size());
+
+            double yOffset        = 0;
+            double columnMinLeft  = Double.MAX_VALUE;
+            double columnMaxRight = 0;
+
+            for (int i = start; i < end; i++) {
+                String sig  = sigs.get(i);
+                String name = sig.contains("(") ? sig.substring(0, sig.indexOf('(')) : sig;
+                ParseResult mr = parse(code, name);
+                if (mr.flowNodes.isEmpty()) continue;
+
+                double minY = mr.flowNodes.stream().mapToDouble(n -> n.y).min().orElse(0);
+                double maxY = mr.flowNodes.stream().mapToDouble(n -> n.y + n.height).max().orElse(0);
+                double minX = mr.flowNodes.stream().mapToDouble(n -> n.x).min().orElse(0);
+                double maxX = mr.flowNodes.stream().mapToDouble(n -> n.x + n.width).max().orElse(0);
+
+                final double xShift = xOffset;
+                final double yShift = yOffset;
+                mr.flowNodes.forEach(n -> { n.x += xShift; n.y += yShift; });
+
+                // Shift stream groups by both x and y offsets
+                List<StreamGroup> shifted = mr.streamGroups.stream()
+                        .map(sg -> new StreamGroup(sg.x + xShift, sg.y + yShift, sg.width, sg.height)).toList();
+                combined.streamGroups.addAll(shifted);
+
+                // Compute method box bounds after shifting, expanded to contain stream groups
+                double boxMinX = (minX + xShift) - PAD;
+                double boxMinY = (minY + yShift) - PAD - 16;
+                double boxMaxX = (maxX + xShift) + PAD;
+                double boxMaxY = (maxY + yShift) + PAD;
+                for (StreamGroup sg : shifted) {
+                    boxMinX = Math.min(boxMinX, sg.x - 8);
+                    boxMaxX = Math.max(boxMaxX, sg.x + sg.width + 8);
+                    boxMinY = Math.min(boxMinY, sg.y - 8);
+                    boxMaxY = Math.max(boxMaxY, sg.y + sg.height + 8);
+                }
+                combined.methodGroups.add(
+                        new MethodBox(name, boxMinX, boxMinY, boxMaxX - boxMinX, boxMaxY - boxMinY));
+
+                // Track this column's horizontal extent to position the next column
+                columnMinLeft  = Math.min(columnMinLeft,  boxMinX);
+                columnMaxRight = Math.max(columnMaxRight, boxMaxX);
+
+                combined.flowNodes.addAll(mr.flowNodes);
+                combined.flowEdges.addAll(mr.flowEdges);
+
+                yOffset += (maxY - minY) + METHOD_GAP;
+            }
+
+            // Advance xOffset so the next column starts after this column's widest box + gap
+            if (columnMaxRight > 0) {
+                xOffset += (columnMaxRight - columnMinLeft) + COLUMN_GAP;
+            }
+        }
+
+        return combined;
+    }
+
+    /**
      * Builds a DECISION node at (decisionX, layout.currentY), then recursively
      * processes the then/else bodies via processBranch.
      * True branch goes RIGHT  (decisionX + branchOffset) so nested ifs never go off-screen.
@@ -236,14 +325,15 @@ public class CodeParser {
         List<Statement> elseStmts = ifStmt.getElseStmt()
                 .map(this::unwrapStatements).orElseGet(ArrayList::new);
 
-        double branchStartY = decisionY + layout.verticalGap;
         double trueX = decisionX + layout.branchOffset; // right; false stays at decisionX (straight down)
 
-        layout.currentY = branchStartY;
+        // True branch is placed at the SAME Y as the decision diamond (side-by-side).
+        layout.currentY = decisionY;
         BranchResult trueBranch = processBranch(result, thenStmts, trueX, layout);
         double trueEndY = layout.currentY;
 
-        layout.currentY = branchStartY;
+        // False branch continues downward from one gap below the decision.
+        layout.currentY = decisionY + layout.verticalGap;
         BranchResult falseBranch = processBranch(result, elseStmts, decisionX, layout);
         double falseEndY = layout.currentY;
 
@@ -421,8 +511,15 @@ public class CodeParser {
     }
 
     private static String trimSemi(String s) {
-        s = s.trim();
+        s = stripComments(s);
         return s.endsWith(";") ? s.substring(0, s.length() - 1).trim() : s;
+    }
+
+    /** Removes // line comments and block comments from a label string. */
+    private static String stripComments(String s) {
+        s = s.replaceAll("/\\*(?s).*?\\*/", " "); // block comments
+        s = s.replaceAll("//[^\n\r]*", "");        // line comments
+        return s.replaceAll("\\s+", " ").trim();
     }
 
     private FlowNode makeNode(String label, NodeType type, double x, double y, double w, double h) {
@@ -600,13 +697,14 @@ public class CodeParser {
 
     private FlowNode createProcessNode(Statement stmt, double x, double y, double width, double height) {
         NodeType type = stmt instanceof ReturnStmt ? NodeType.END : NodeType.PROCESS;
+        String label = stripComments(stmt.toString());
         FlowNode node = new FlowNode(
                 UUID.randomUUID().toString(),
-                stmt.toString().trim(),
+                label,
                 type,
                 x, y, width, height
         );
-        if (type == NodeType.PROCESS) node.expression = stmt.toString().trim();
+        if (type == NodeType.PROCESS) node.expression = label;
         node.beginLine = stmt.getBegin().map(p -> p.line).orElse(0);
         node.endLine   = stmt.getEnd().map(p -> p.line).orElse(0);
         return node;

@@ -1,14 +1,14 @@
 package sample_code;
 /*  SAMPLE CODE
 
---- Sample 1: simple if ---
+//--- Sample 1: simple if ---
 
 int x = 3;
 if (x > 0) {
     x--;
 }
 
---- Sample 2: if-else with multiple statements ---
+//--- Sample 2: if-else with multiple statements ---
 
 int x = 4;
 if (x < 5) {
@@ -37,7 +37,7 @@ y = 10;
 System.out.println(x,y);
 
 
---- Sample 4: compound condition ---
+//--- Sample 4: compound condition ---
 
 int x = 5;
 int y = 10;
@@ -48,7 +48,7 @@ y++;
 System.out.println(x,y);
 
 
---- Sample 5: nested if ---
+//--- Sample 5: nested if ---
 
 int x = 5;
 int y = 0;
@@ -64,7 +64,7 @@ if (y == 0) {
 }
 
 
---- Sample 6: save order to database ---
+//--- Sample 6: save order to database ---
 
 public void updateOrder(int requestId) {
 int orderId = getNextOrderId(requestId);
@@ -81,7 +81,7 @@ sendConfirmation(customerId);
 }
 
 
---- Sample 7: score summary with streaming and ternary ---
+//--- Sample 7: score summary with streaming and ternary ---
 
 public int summarizeScores(int threshold) {
     List<Integer> scores = Arrays.asList(85, 42, 90, 61, 78);

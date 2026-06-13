@@ -288,6 +288,15 @@ public class ExecutionEngine {
     private Object evaluateExpression(String expr) {
         expr = expr.trim();
 
+        // String literal: "hello" → hello
+        if (expr.startsWith("\"") && expr.endsWith("\"") && expr.length() >= 2) {
+            return expr.substring(1, expr.length() - 1);
+        }
+
+        if ("null".equals(expr)) {
+            return null;
+        }
+
         if (expr.matches("^-?\\d+$")) {
             return Integer.parseInt(expr);
         }
