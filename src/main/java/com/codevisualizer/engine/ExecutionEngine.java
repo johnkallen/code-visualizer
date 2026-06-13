@@ -374,6 +374,35 @@ public class ExecutionEngine {
             return result;
         }
 
+        if (expr.contains("*")) {
+            String[] parts = expr.split("\\*");
+            int result = 1;
+            for (String part : parts) {
+                result *= toInt(evaluateExpression(part.trim()));
+            }
+            return result;
+        }
+
+        if (expr.contains("/")) {
+            String[] parts = expr.split("/");
+            int result = toInt(evaluateExpression(parts[0].trim()));
+            for (int i = 1; i < parts.length; i++) {
+                int divisor = toInt(evaluateExpression(parts[i].trim()));
+                if (divisor != 0) result /= divisor;
+            }
+            return result;
+        }
+
+        if (expr.contains("%")) {
+            String[] parts = expr.split("%");
+            int result = toInt(evaluateExpression(parts[0].trim()));
+            for (int i = 1; i < parts.length; i++) {
+                int divisor = toInt(evaluateExpression(parts[i].trim()));
+                if (divisor != 0) result %= divisor;
+            }
+            return result;
+        }
+
         return null;
     }
 
