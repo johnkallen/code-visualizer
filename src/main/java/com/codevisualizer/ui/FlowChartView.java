@@ -476,31 +476,23 @@ public class FlowChartView {
 
     private void setupZoom() {
         root.addEventFilter(ScrollEvent.SCROLL, event -> {
-            if (event.getDeltaY() == 0) {
-                return;
-            }
+            if (event.getDeltaY() == 0) return;
 
             double oldScale = scale;
-            double zoomMultiplier = event.getDeltaY() > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
-            scale = clamp(scale * zoomMultiplier);
+            scale = clamp(scale * (event.getDeltaY() > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR));
+            if (Math.abs(scale - oldScale) < 0.0001) return;
 
-            if (Math.abs(scale - oldScale) < 0.0001) {
-                return;
-            }
-
-            double mouseX = event.getX();
-            double mouseY = event.getY();
-
-            Bounds bounds = contentGroup.getBoundsInParent();
-            double dx = mouseX - bounds.getMinX();
-            double dy = mouseY - bounds.getMinY();
-            double f = scale / oldScale - 1;
+            // Where is the mouse in content-local space before the scale changes?
+            javafx.geometry.Point2D mouseInLocal =
+                    contentGroup.sceneToLocal(event.getSceneX(), event.getSceneY());
 
             contentGroup.setScaleX(scale);
             contentGroup.setScaleY(scale);
 
-            contentGroup.setTranslateX(contentGroup.getTranslateX() - f * dx);
-            contentGroup.setTranslateY(contentGroup.getTranslateY() - f * dy);
+            // After scaling, shift translate so that same local point stays under the mouse.
+            javafx.geometry.Point2D nowInScene = contentGroup.localToScene(mouseInLocal);
+            contentGroup.setTranslateX(contentGroup.getTranslateX() + (event.getSceneX() - nowInScene.getX()));
+            contentGroup.setTranslateY(contentGroup.getTranslateY() + (event.getSceneY() - nowInScene.getY()));
 
             event.consume();
         });
